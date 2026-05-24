@@ -17,7 +17,6 @@ static uint32_t current_hour = 7;
 static uint32_t current_minute = 37;
 static uint64_t last_time_update = 0;
 static uint64_t last_display_time = 0;
-static bool display_complete = false;
 
 static char serial_buffer[64];
 static int buffer_index = 0;
@@ -152,7 +151,6 @@ void start_display(void) {
     fsm.led_on = false;
     fsm.last_tick = to_ms_since_boot(get_absolute_time());
     fsm.current_state = STATE_BLINK_HOUR;
-    display_complete = false;
 }
 
 void fsm_update(fsm_t *fsm) {
@@ -161,7 +159,7 @@ void fsm_update(fsm_t *fsm) {
     
     switch (fsm->current_state) {
         case STATE_IDLE:
-            if (!display_complete && (now_us - last_display_time >= 3000000)) {
+            if (now_us - last_display_time >= 3000000) {
                 start_display();
                 last_display_time = now_us;
             }
@@ -203,7 +201,6 @@ void fsm_update(fsm_t *fsm) {
                 if (current_time.n_quarter == 0) {
                     if (current_time.n_minute_rem == 0) {
                         fsm->current_state = STATE_IDLE;
-                        display_complete = true;
                     } else {
                         fsm->blink_count = 0;
                         fsm->blink_total = current_time.n_minute_rem;
@@ -245,7 +242,6 @@ void fsm_update(fsm_t *fsm) {
             if (now - fsm->transition_start >= 1500) {
                 if (current_time.n_minute_rem == 0) {
                     fsm->current_state = STATE_IDLE;
-                    display_complete = true;
                 } else {
                     fsm->blink_count = 0;
                     fsm->blink_total = current_time.n_minute_rem;
@@ -272,7 +268,6 @@ void fsm_update(fsm_t *fsm) {
                 }
             } else {
                 fsm->current_state = STATE_IDLE;
-                display_complete = true;
             }
             break;
     }
