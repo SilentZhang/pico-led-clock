@@ -4,7 +4,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define BUTTON_PIN 21
 #define WS2812_PIN 16
 #define WS2812_NUM_LEDS 1
 
@@ -37,7 +36,6 @@ typedef struct {
 void rtc_setup(void);
 void gpio_setup(void);
 void ws2812_init(void);
-void button_irq_handler(uint gpio, uint32_t events);
 void fsm_init(fsm_t *fsm);
 void fsm_update(fsm_t *fsm);
 time_encoded_t encode_time(void);

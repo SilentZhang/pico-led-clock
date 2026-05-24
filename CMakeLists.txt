@@ -34,7 +34,6 @@ pico_generate_pio_header(led_visual_clock ${CMAKE_CURRENT_LIST_DIR}/ws2812.pio)
 target_link_libraries(led_visual_clock
     pico_stdlib
     hardware_pio
-    hardware_irq
     hardware_gpio
     pico_time
     m

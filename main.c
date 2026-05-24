@@ -3,13 +3,11 @@
 #include "pico/stdlib.h"
 #include "hardware/pio.h"
 #include "hardware/gpio.h"
-#include "hardware/irq.h"
 #include "pico/time.h"
 #include "led_clock.h"
 #include "ws2812.pio.h"
 
 static fsm_t fsm;
-static volatile bool button_pressed = false;
 static time_encoded_t current_time;
 static PIO ws2812_pio = pio0;
 static uint ws2812_sm;
@@ -17,16 +15,15 @@ static uint ws2812_sm;
 static uint32_t current_hour = 7;
 static uint32_t current_minute = 37;
 static uint64_t last_time_update = 0;
+static uint64_t last_display_time = 0;
+static bool display_complete = false;
 
 void rtc_setup(void) {
     last_time_update = to_us_since_boot(get_absolute_time());
+    last_display_time = last_time_update;
 }
 
 void gpio_setup(void) {
-    gpio_init(BUTTON_PIN);
-    gpio_set_dir(BUTTON_PIN, GPIO_IN);
-    gpio_pull_up(BUTTON_PIN);
-    gpio_set_irq_enabled_with_callback(BUTTON_PIN, GPIO_IRQ_EDGE_FALL, true, &button_irq_handler);
 }
 
 void ws2812_init(void) {
@@ -57,12 +54,6 @@ void set_ws2812(uint8_t r, uint8_t g, uint8_t b) {
 
 void all_leds_off(void) {
     set_ws2812(0, 0, 0);
-}
-
-void button_irq_handler(uint gpio, uint32_t events) {
-    if (gpio == BUTTON_PIN && fsm.current_state == STATE_IDLE) {
-        button_pressed = true;
-    }
 }
 
 void update_time(void) {
@@ -109,20 +100,26 @@ void fsm_init(fsm_t *fsm) {
     fsm->transition_start = 0;
 }
 
+void start_display(void) {
+    current_time = encode_time();
+    fsm.blink_count = 0;
+    fsm.blink_total = current_time.n_hour;
+    fsm.led_on = false;
+    fsm.breath_step = 0;
+    fsm.last_tick = to_ms_since_boot(get_absolute_time());
+    fsm.current_state = STATE_BLINK_HOUR;
+    display_complete = false;
+}
+
 void fsm_update(fsm_t *fsm) {
     uint32_t now = to_ms_since_boot(get_absolute_time());
+    uint64_t now_us = to_us_since_boot(get_absolute_time());
     
     switch (fsm->current_state) {
         case STATE_IDLE:
-            if (button_pressed) {
-                button_pressed = false;
-                current_time = encode_time();
-                fsm->blink_count = 0;
-                fsm->blink_total = current_time.n_hour;
-                fsm->led_on = false;
-                fsm->breath_step = 0;
-                fsm->last_tick = now;
-                fsm->current_state = STATE_BLINK_HOUR;
+            if (!display_complete && (now_us - last_display_time >= 10000000)) {
+                start_display();
+                last_display_time = now_us;
             }
             break;
             
@@ -171,6 +168,7 @@ void fsm_update(fsm_t *fsm) {
                 if (current_time.n_quarter == 0) {
                     if (current_time.n_minute_rem == 0) {
                         fsm->current_state = STATE_IDLE;
+                        display_complete = true;
                     } else {
                         fsm->blink_count = 0;
                         fsm->blink_total = current_time.n_minute_rem;
@@ -212,6 +210,7 @@ void fsm_update(fsm_t *fsm) {
             if (now - fsm->transition_start >= 1500) {
                 if (current_time.n_minute_rem == 0) {
                     fsm->current_state = STATE_IDLE;
+                    display_complete = true;
                 } else {
                     fsm->blink_count = 0;
                     fsm->blink_total = current_time.n_minute_rem;
@@ -238,6 +237,7 @@ void fsm_update(fsm_t *fsm) {
                 }
             } else {
                 fsm->current_state = STATE_IDLE;
+                display_complete = true;
             }
             break;
     }
