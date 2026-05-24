@@ -17,19 +17,20 @@ static uint32_t current_hour = 7;
 static uint32_t current_minute = 37;
 static uint64_t last_time_update = 0;
 static uint64_t last_display_time = 0;
-static uint64_t last_request_time = 0;
 static bool time_synced = false;
 
-static char serial_buffer[64];
-static int buffer_index = 0;
-
-void rtc_setup(void) {
+void set_ntp_callback(uint32_t hour, uint32_t minute) {
+    current_hour = hour;
+    current_minute = minute;
     last_time_update = to_us_since_boot(get_absolute_time());
-    last_display_time = last_time_update;
-    last_request_time = last_time_update - 5000000; // Request immediately after start
-}
-
-void gpio_setup(void) {
+    time_synced = true;
+    
+    for (int i = 0; i < 2; i++) {
+        set_ws2812(0, 255, 0);
+        sleep_ms(100);
+        all_leds_off();
+        sleep_ms(100);
+    }
 }
 
 void ws2812_init(void) {
@@ -76,67 +77,6 @@ void update_time(void) {
             }
         }
         last_time_update += 60000000;
-    }
-}
-
-void set_time(uint32_t hour, uint32_t minute) {
-    current_hour = hour;
-    current_minute = minute;
-    last_time_update = to_us_since_boot(get_absolute_time());
-    time_synced = true;
-    
-    for (int i = 0; i < 2; i++) {
-        set_ws2812(0, 255, 0);
-        sleep_ms(100);
-        all_leds_off();
-        sleep_ms(100);
-    }
-}
-
-void parse_serial_command(const char* cmd) {
-    if (strncmp(cmd, "SETTIME ", 8) == 0) {
-        char* time_str = (char*)cmd + 8;
-        char* colon = strchr(time_str, ':');
-        if (colon != NULL) {
-            uint32_t hour = atoi(time_str);
-            uint32_t minute = atoi(colon + 1);
-            if (hour < 24 && minute < 60) {
-                set_time(hour, minute);
-            }
-        }
-    }
-}
-
-void process_serial(void) {
-    int ch;
-    while ((ch = getchar_timeout_us(0)) != PICO_ERROR_TIMEOUT) {
-        if (ch == '\n' || ch == '\r') {
-            if (buffer_index > 0) {
-                serial_buffer[buffer_index] = '\0';
-                parse_serial_command(serial_buffer);
-                buffer_index = 0;
-            }
-        } else if (buffer_index < (int)sizeof(serial_buffer) - 1) {
-            serial_buffer[buffer_index++] = (char)ch;
-        }
-    }
-}
-
-void request_time(void) {
-    uint64_t now = to_us_since_boot(get_absolute_time());
-    
-    // Fast request at first (every 5 seconds) until synced, then every minute for testing
-    uint64_t request_interval = time_synced ? 60000000 : 5000000; // 1min or 5sec
-    
-    if (now - last_request_time >= request_interval) {
-        // Flash blue LED to show we're requesting time
-        set_ws2812(0, 0, 255);
-        sleep_ms(50);
-        all_leds_off();
-        
-        // Send a request string to PC
-        printf("GETTIME\r\n");
-        last_request_time = now;
     }
 }
 
@@ -299,13 +239,14 @@ int main(void) {
     stdio_init_all();
     
     ws2812_init();
-    rtc_setup();
-    gpio_setup();
+    net_init();
     fsm_init(&fsm);
     
+    last_time_update = to_us_since_boot(get_absolute_time());
+    last_display_time = last_time_update;
+    
     while (true) {
-        request_time();
-        process_serial();
+        net_task();
         fsm_update(&fsm);
         tight_loop_contents();
     }

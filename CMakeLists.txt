@@ -27,18 +27,28 @@ pico_sdk_init()
 
 add_executable(led_visual_clock
     main.c
+    net.c
+    rndis_reports.c
+    usb_descriptors.c
 )
 
 pico_generate_pio_header(led_visual_clock ${CMAKE_CURRENT_LIST_DIR}/ws2812.pio)
 
+target_include_directories(led_visual_clock PRIVATE ${CMAKE_CURRENT_LIST_DIR})
+
 target_link_libraries(led_visual_clock
     pico_stdlib
+    pico_lwip
+    pico_lwip_nosys
+    tinyusb_device
+    tinyusb_board
     hardware_pio
     pico_time
+    pico_async_context_threadsafe_background
     m
 )
 
-pico_enable_stdio_usb(led_visual_clock 1)
+pico_enable_stdio_usb(led_visual_clock 0)
 pico_enable_stdio_uart(led_visual_clock 0)
 
 pico_add_extra_outputs(led_visual_clock)
