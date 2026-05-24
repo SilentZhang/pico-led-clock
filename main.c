@@ -93,7 +93,6 @@ void fsm_init(fsm_t *fsm) {
     fsm->current_state = STATE_IDLE;
     fsm->blink_count = 0;
     fsm->blink_total = 0;
-    fsm->breath_step = 0;
     fsm->led_on = false;
     fsm->last_tick = 0;
     fsm->transition_active = false;
@@ -105,7 +104,6 @@ void start_display(void) {
     fsm.blink_count = 0;
     fsm.blink_total = current_time.n_hour;
     fsm.led_on = false;
-    fsm.breath_step = 0;
     fsm.last_tick = to_ms_since_boot(get_absolute_time());
     fsm.current_state = STATE_BLINK_HOUR;
     display_complete = false;
@@ -130,26 +128,17 @@ void fsm_update(fsm_t *fsm) {
                 if (!fsm->led_on && elapsed >= 800) {
                     fsm->led_on = true;
                     fsm->last_tick = now;
-                    fsm->breath_step = 0;
+                    set_ws2812(255, 0, 0);
                 } else if (fsm->led_on && elapsed >= 800) {
                     fsm->led_on = false;
                     fsm->blink_count++;
                     fsm->last_tick = now;
+                    all_leds_off();
                     
                     if (fsm->blink_count % 3 == 0 && fsm->blink_count < fsm->blink_total) {
                         fsm->transition_active = true;
                         fsm->transition_start = now;
                     }
-                }
-                
-                if (fsm->led_on) {
-                    uint32_t breath_elapsed = now - fsm->last_tick;
-                    int16_t breath_val = (sin((breath_elapsed * 3.14159f) / 800.0f) * 127) + 128;
-                    if (breath_val < 0) breath_val = 0;
-                    if (breath_val > 255) breath_val = 255;
-                    set_ws2812(breath_val, 0, 0);
-                } else {
-                    all_leds_off();
                 }
                 
                 if (fsm->transition_active && (now - fsm->transition_start >= 1500)) {
