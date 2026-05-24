@@ -44,8 +44,8 @@ void ws2812_init(void) {
 
 static inline uint32_t urgb_u32(uint8_t r, uint8_t g, uint8_t b) {
     return ((uint32_t)(g) << 24) |
-           ((uint32_t)(b) << 16) |
-           ((uint32_t)(r) << 8);
+           ((uint32_t)(r) << 16) |
+           ((uint32_t)(b) << 8);
 }
 
 void set_ws2812(uint8_t r, uint8_t g, uint8_t b) {
@@ -117,7 +117,7 @@ void fsm_update(fsm_t *fsm) {
     
     switch (fsm->current_state) {
         case STATE_IDLE:
-            if (!display_complete && (now_us - last_display_time >= 10000000)) {
+            if (!display_complete && (now_us - last_display_time >= 3000000)) {
                 start_display();
                 last_display_time = now_us;
             }
@@ -127,11 +127,11 @@ void fsm_update(fsm_t *fsm) {
             if (fsm->blink_count < fsm->blink_total) {
                 uint32_t elapsed = now - fsm->last_tick;
                 
-                if (!fsm->led_on && elapsed >= 500) {
+                if (!fsm->led_on && elapsed >= 800) {
                     fsm->led_on = true;
                     fsm->last_tick = now;
                     fsm->breath_step = 0;
-                } else if (fsm->led_on && elapsed >= 500) {
+                } else if (fsm->led_on && elapsed >= 800) {
                     fsm->led_on = false;
                     fsm->blink_count++;
                     fsm->last_tick = now;
@@ -144,7 +144,7 @@ void fsm_update(fsm_t *fsm) {
                 
                 if (fsm->led_on) {
                     uint32_t breath_elapsed = now - fsm->last_tick;
-                    int16_t breath_val = (sin((breath_elapsed * 3.14159f) / 500.0f) * 127) + 128;
+                    int16_t breath_val = (sin((breath_elapsed * 3.14159f) / 800.0f) * 127) + 128;
                     if (breath_val < 0) breath_val = 0;
                     if (breath_val > 255) breath_val = 255;
                     set_ws2812(breath_val, 0, 0);
@@ -152,7 +152,7 @@ void fsm_update(fsm_t *fsm) {
                     all_leds_off();
                 }
                 
-                if (fsm->transition_active && (now - fsm->transition_start >= 1000)) {
+                if (fsm->transition_active && (now - fsm->transition_start >= 1500)) {
                     fsm->transition_active = false;
                     fsm->last_tick = now;
                 }
@@ -190,11 +190,11 @@ void fsm_update(fsm_t *fsm) {
             if (fsm->blink_count < fsm->blink_total) {
                 uint32_t elapsed = now - fsm->last_tick;
                 
-                if (!fsm->led_on && elapsed >= 250) {
+                if (!fsm->led_on && elapsed >= 500) {
                     fsm->led_on = true;
                     fsm->last_tick = now;
                     set_ws2812(0, 255, 0);
-                } else if (fsm->led_on && elapsed >= 250) {
+                } else if (fsm->led_on && elapsed >= 500) {
                     fsm->led_on = false;
                     fsm->blink_count++;
                     fsm->last_tick = now;
@@ -225,11 +225,11 @@ void fsm_update(fsm_t *fsm) {
             if (fsm->blink_count < fsm->blink_total) {
                 uint32_t elapsed = now - fsm->last_tick;
                 
-                if (!fsm->led_on && elapsed >= 125) {
+                if (!fsm->led_on && elapsed >= 400) {
                     fsm->led_on = true;
                     fsm->last_tick = now;
                     set_ws2812(0, 0, 255);
-                } else if (fsm->led_on && elapsed >= 125) {
+                } else if (fsm->led_on && elapsed >= 400) {
                     fsm->led_on = false;
                     fsm->blink_count++;
                     fsm->last_tick = now;
