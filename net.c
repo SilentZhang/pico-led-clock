@@ -132,66 +132,56 @@ static struct tcp_pcb *http_server_pcb = NULL;
 
 static void generate_html_page(char *buffer, size_t buffer_size)
 {
-    snprintf(buffer, buffer_size,
-        "HTTP/1.1 200 OK\r\n"
-        "Content-Type: text/html\r\n"
-        "Connection: close\r\n"
-        "\r\n"
-        "<!DOCTYPE html>"
-        "<html>"
-        "<head><meta charset='UTF-8'><title>LED Clock - Time Setup</title></head>"
-        "<body style='font-family: Arial, sans-serif; padding: 40px; max-width: 500px; margin: 0 auto;'>"
-        "<h1 style='color: #333; text-align: center;'>LED Clock - Time Setup</h1>"
-        "<div style='background: #f5f5f5; padding: 30px; border-radius: 10px; margin-top: 20px;'>"
-        "<form method='POST' action='/set'>"
-        "<div style='margin-bottom: 20px;'>"
-        "<label style='display: block; margin-bottom: 8px; font-weight: bold;'>Hour (0-23):</label>"
-        "<input type='number' name='hour' id='hourInput' min='0' max='23' value='%02d' style='width: 100%%; padding: 10px; font-size: 16px; border: 2px solid #ddd; border-radius: 5px;'>"
-        "</div>"
-        "<div style='margin-bottom: 20px;'>"
-        "<label style='display: block; margin-bottom: 8px; font-weight: bold;'>Minute (0-59):</label>"
-        "<input type='number' name='minute' id='minuteInput' min='0' max='59' value='%02d' style='width: 100%%; padding: 10px; font-size: 16px; border: 2px solid #ddd; border-radius: 5px;'>"
-        "</div>"
-        "<button type='submit' style='width: 100%%; padding: 15px; font-size: 18px; background: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold;'>"
-        "Set Time"
-        "</button>"
-        "</form>"
-        "</div>"
-        "<div style='margin-top: 30px; text-align: center; color: #666;'>"
-        "<p>Device Address: 192.168.7.1</p>"
-        "<p>First set static IP on PC to 192.168.7.2</p>"
-        "</div>"
-        "<script>"
-        "window.onload = function() {"
-        "    var now = new Date();"
-        "    document.getElementById('hourInput').value = now.getHours();"
-        "    document.getElementById('minuteInput').value = now.getMinutes();"
-        "};"
-        "</script>"
-        "</body>"
-        "</html>",
-        (int)current_hour, (int)current_minute);
+    char temp[32];
+    buffer[0] = '\0';
+    
+    strncat(buffer, "HTTP/1.1 200 OK\r\n", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "Content-Type: text/html\r\n", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "Connection: close\r\n", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "\r\n", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "<!DOCTYPE html><html>", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "<head><meta charset='UTF-8'><title>LED Clock</title></head>", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "<body style='font-family:Arial,sans-serif;padding:40px;max-width:500px;margin:0 auto;'>", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "<h1 style='color:#333;text-align:center;'>LED Clock - Time Setup</h1>", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "<div style='background:#f5f5f5;padding:30px;border-radius:10px;margin-top:20px;'>", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "<form method='POST' action='/set'>", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "<div style='margin-bottom:20px;'><label style='display:block;margin-bottom:8px;font-weight:bold;'>Hour (0-23):</label>", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "<input type='number' name='hour' id='h' min='0' max='23' value='", buffer_size - strlen(buffer) - 1);
+    snprintf(temp, sizeof(temp), "%02d", (int)current_hour);
+    strncat(buffer, temp, buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "' style='width:100%;padding:10px;font-size:16px;border:2px solid #ddd;border-radius:5px;'></div>", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "<div style='margin-bottom:20px;'><label style='display:block;margin-bottom:8px;font-weight:bold;'>Minute (0-59):</label>", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "<input type='number' name='minute' id='m' min='0' max='59' value='", buffer_size - strlen(buffer) - 1);
+    snprintf(temp, sizeof(temp), "%02d", (int)current_minute);
+    strncat(buffer, temp, buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "' style='width:100%;padding:10px;font-size:16px;border:2px solid #ddd;border-radius:5px;'></div>", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "<button type='submit' style='width:100%;padding:15px;font-size:18px;background:#4CAF50;color:white;border:none;border-radius:5px;cursor:pointer;font-weight:bold;'>Set Time</button>", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "</form></div>", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "<div style='margin-top:30px;text-align:center;color:#666;'><p>Device Address: 192.168.7.1</p><p>First set static IP on PC to 192.168.7.2</p></div>", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "<script>onload=function(){var n=new Date();document.getElementById('h').value=n.getHours();document.getElementById('m').value=n.getMinutes();};</script>", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "</body></html>", buffer_size - strlen(buffer) - 1);
 }
 
 static void generate_success_page(char *buffer, size_t buffer_size, int hour, int minute)
 {
-    snprintf(buffer, buffer_size,
-        "HTTP/1.1 200 OK\r\n"
-        "Content-Type: text/html\r\n"
-        "Connection: close\r\n"
-        "\r\n"
-        "<!DOCTYPE html>"
-        "<html>"
-        "<head><meta charset='UTF-8'><title>Success!</title></head>"
-        "<body style='font-family: Arial, sans-serif; padding: 40px; text-align: center;'>"
-        "<h1 style='color: #4CAF50;'>Time Set Successfully!</h1>"
-        "<div style='background: #e8f5e9; padding: 30px; border-radius: 10px; margin-top: 20px; display: inline-block;'>"
-        "<p style='font-size: 24px; margin: 0;'>Current Time: %02d:%02d</p>"
-        "</div>"
-        "<p style='margin-top: 30px;'><a href='/' style='color: #2196F3; font-size: 18px;'>Back to Setup</a></p>"
-        "</body>"
-        "</html>",
-        hour, minute);
+    char temp[32];
+    buffer[0] = '\0';
+    
+    strncat(buffer, "HTTP/1.1 200 OK\r\n", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "Content-Type: text/html\r\n", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "Connection: close\r\n", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "\r\n", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "<!DOCTYPE html><html>", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "<head><meta charset='UTF-8'><title>Success!</title></head>", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "<body style='font-family:Arial,sans-serif;padding:40px;text-align:center;'>", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "<h1 style='color:#4CAF50;'>Time Set Successfully!</h1>", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "<div style='background:#e8f5e9;padding:30px;border-radius:10px;margin-top:20px;display:inline-block;'>", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "<p style='font-size:24px;margin:0;'>Current Time: ", buffer_size - strlen(buffer) - 1);
+    snprintf(temp, sizeof(temp), "%02d:%02d", hour, minute);
+    strncat(buffer, temp, buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "</p></div>", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "<p style='margin-top:30px;'><a href='/' style='color:#2196F3;font-size:18px;'>Back to Setup</a></p>", buffer_size - strlen(buffer) - 1);
+    strncat(buffer, "</body></html>", buffer_size - strlen(buffer) - 1);
 }
 
 static err_t http_sent(void *arg, struct tcp_pcb *tpcb, u16_t len)
