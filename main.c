@@ -5,6 +5,7 @@
 #include "pico/stdlib.h"
 #include "hardware/pio.h"
 #include "pico/time.h"
+#include "tusb.h"
 #include "led_clock.h"
 #include "ws2812.pio.h"
 
@@ -18,6 +19,11 @@ static uint32_t current_minute = 37;
 static uint64_t last_time_update = 0;
 static uint64_t last_display_time = 0;
 static bool time_synced = false;
+static uint8_t network_status = 0; // 0: no link, 1: link up, 2: dhcp ok, 3: ntp ok
+
+void indicate_network_status(uint8_t status) {
+    network_status = status;
+}
 
 void set_ntp_callback(uint32_t hour, uint32_t minute) {
     current_hour = hour;
@@ -118,6 +124,21 @@ void start_display(void) {
 void fsm_update(fsm_t *fsm) {
     uint32_t now = to_ms_since_boot(get_absolute_time());
     uint64_t now_us = to_us_since_boot(get_absolute_time());
+    
+    // 在时间同步之前，显示网络状态
+    if (!time_synced) {
+        if (now % 1000 < 200) {
+            switch (network_status) {
+                case 1: set_ws2812(0, 0, 255); break; // link up - blue
+                case 2: set_ws2812(255, 0, 255); break; // DHCP ready - purple
+                case 3: set_ws2812(0, 255, 0); break; // NTP OK - green
+                default: set_ws2812(255, 0, 0); break; // no link - red
+            }
+        } else {
+            all_leds_off();
+        }
+        return;
+    }
     
     switch (fsm->current_state) {
         case STATE_IDLE:
@@ -239,6 +260,7 @@ int main(void) {
     stdio_init_all();
     
     ws2812_init();
+    tusb_init();  // 初始化 TinyUSB USB 设备
     net_init();
     fsm_init(&fsm);
     
