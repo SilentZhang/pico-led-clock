@@ -16,6 +16,7 @@ static uint ws2812_sm;
 
 static uint32_t current_hour = 7;
 static uint32_t current_minute = 37;
+static uint32_t current_second = 0;
 static uint64_t last_time_update = 0;
 static uint64_t last_display_time = 0;
 static bool time_synced = false;
@@ -25,9 +26,10 @@ void indicate_network_status(uint8_t status) {
     network_status = status;
 }
 
-void set_ntp_callback(uint32_t hour, uint32_t minute) {
+void set_ntp_callback(uint32_t hour, uint32_t minute, uint32_t second) {
     current_hour = hour;
     current_minute = minute;
+    current_second = second;
     last_time_update = to_us_since_boot(get_absolute_time());
     time_synced = true;
     
@@ -73,16 +75,20 @@ void update_time(void) {
     uint64_t now = to_us_since_boot(get_absolute_time());
     uint64_t elapsed = now - last_time_update;
     
-    if (elapsed >= 60000000) {
-        current_minute++;
-        if (current_minute >= 60) {
-            current_minute = 0;
-            current_hour++;
-            if (current_hour >= 24) {
-                current_hour = 0;
+    if (elapsed >= 1000000) {
+        current_second++;
+        if (current_second >= 60) {
+            current_second = 0;
+            current_minute++;
+            if (current_minute >= 60) {
+                current_minute = 0;
+                current_hour++;
+                if (current_hour >= 24) {
+                    current_hour = 0;
+                }
             }
         }
-        last_time_update += 60000000;
+        last_time_update += 1000000;
     }
 }
 
@@ -268,6 +274,7 @@ int main(void) {
     last_display_time = last_time_update;
     
     while (true) {
+        update_time();
         net_task();
         fsm_update(&fsm);
         tight_loop_contents();
