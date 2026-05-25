@@ -146,11 +146,11 @@ static void generate_html_page(char *buffer, size_t buffer_size)
         "<form method='POST' action='/set'>"
         "<div style='margin-bottom: 20px;'>"
         "<label style='display: block; margin-bottom: 8px; font-weight: bold;'>Hour (0-23):</label>"
-        "<input type='number' name='hour' min='0' max='23' value='%02d' style='width: 100%%; padding: 10px; font-size: 16px; border: 2px solid #ddd; border-radius: 5px;'>"
+        "<input type='number' name='hour' id='hourInput' min='0' max='23' value='%02d' style='width: 100%%; padding: 10px; font-size: 16px; border: 2px solid #ddd; border-radius: 5px;'>"
         "</div>"
         "<div style='margin-bottom: 20px;'>"
         "<label style='display: block; margin-bottom: 8px; font-weight: bold;'>Minute (0-59):</label>"
-        "<input type='number' name='minute' min='0' max='59' value='%02d' style='width: 100%%; padding: 10px; font-size: 16px; border: 2px solid #ddd; border-radius: 5px;'>"
+        "<input type='number' name='minute' id='minuteInput' min='0' max='59' value='%02d' style='width: 100%%; padding: 10px; font-size: 16px; border: 2px solid #ddd; border-radius: 5px;'>"
         "</div>"
         "<button type='submit' style='width: 100%%; padding: 15px; font-size: 18px; background: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold;'>"
         "Set Time"
@@ -161,6 +161,13 @@ static void generate_html_page(char *buffer, size_t buffer_size)
         "<p>Device Address: 192.168.7.1</p>"
         "<p>First set static IP on PC to 192.168.7.2</p>"
         "</div>"
+        "<script>"
+        "window.onload = function() {"
+        "    var now = new Date();"
+        "    document.getElementById('hourInput').value = now.getHours();"
+        "    document.getElementById('minuteInput').value = now.getMinutes();"
+        "};"
+        "</script>"
         "</body>"
         "</html>",
         (int)current_hour, (int)current_minute);
@@ -219,7 +226,7 @@ static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
     }
     
     char *request = (char *)p->payload;
-    char response[2048];
+    static char response[4096];
     
     if (strstr(request, "POST /set") != NULL) {
         int hour = 0, minute = 0;
@@ -241,7 +248,10 @@ static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
         generate_html_page(response, sizeof(response));
     }
     
-    tcp_write(tpcb, response, strlen(response), TCP_WRITE_FLAG_COPY);
+    err_t err_write = tcp_write(tpcb, response, strlen(response), TCP_WRITE_FLAG_COPY);
+    if (err_write == ERR_OK) {
+        tcp_output(tpcb);
+    }
     tcp_sent(tpcb, http_sent);
     
     pbuf_free(p);
