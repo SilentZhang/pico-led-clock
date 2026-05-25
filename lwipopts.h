@@ -1,3 +1,4 @@
+
 #ifndef __LWIPOPTS_H__
 #define __LWIPOPTS_H__
 
@@ -27,13 +28,16 @@
 #define LWIP_ICMP                   1
 #define LWIP_IGMP                   0
 #define LWIP_UDP                    1
-#define LWIP_TCP                    0
+#define LWIP_TCP                    1
 
 #define TCP_MSS                     1460
 #define TCP_WND                     (2*TCP_MSS)
 #define TCP_SND_BUF                 (2*TCP_MSS)
 #define TCP_QUEUE_OOSEQ             0
 #define TCP_SND_QUEUELEN            4
+#define TCP_SNDQUEUELOWAT           2
+
+#define LWIP_DISABLE_TCP_SANITY_CHECKS 1
 
 #define LWIP_NETIF_HOSTNAME         1
 #define LWIP_NETIF_STATUS_CALLBACK  1

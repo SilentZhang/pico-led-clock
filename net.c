@@ -5,36 +5,29 @@
 #include "lwip/dhcp.h"
 #include "lwip/netif.h"
 #include "lwip/udp.h"
+#include "lwip/tcp.h"
 #include "lwip/dns.h"
 #include "lwip/timeouts.h"
 #include "lwip/init.h"
+#include "lwip/ip_addr.h"
 #include "netif/etharp.h"
 #include "tusb.h"
 #include "rndis_protocol.h"
 #include "dhserver.h"
 #include "dnserver.h"
 #include <string.h>
+#include <stdio.h>
 
 static struct netif netif;
 static uint32_t current_hour = 0;
 static uint32_t current_minute = 0;
 static bool time_synced = false;
 static bool network_connected = false;
-static bool ntp_triggered = false;
 
 static struct pbuf *received_frame;
 
 extern void set_ntp_callback(uint32_t hour, uint32_t minute);
-extern void indicate_network_status(uint8_t status); // 0: no link, 1: link up, 2: dhcp ok, 3: ntp ok
-
-// NTP相关变量
-static struct udp_pcb *ntp_pcb = NULL;
-static volatile bool ntp_requested = false;
-
-// NTP常量
-#define NTP_PORT 123
-#define NTP_PACKET_SIZE 48
-#define NTP_TIMESTAMP_DELTA 2208988800ULL
+extern void indicate_network_status(uint8_t status);
 
 uint8_t tud_network_mac_address[6] = {0x02, 0x02, 0x84, 0x6A, 0x96, 0x00};
 
@@ -49,12 +42,7 @@ static dhcp_config_t dhcp_config = { .router = INIT_IP4(0, 0, 0, 0), .port = 67,
 
 static bool dns_query_proc(const char *name, ip4_addr_t *addr)
 {
-  if (!strcmp(name, "pool.ntp.org"))
-  {
-    addr->addr = ipaddr.addr;
-    return true;
-  }
-  return false;
+    return false;
 }
 
 static err_t linkoutput_fn(struct netif *netif, struct pbuf *p)
@@ -126,52 +114,6 @@ uint16_t tud_network_xmit_cb(uint8_t *dst, void *ref, uint16_t arg)
     return pbuf_copy_partial(p, dst, p->tot_len, 0);
 }
 
-static void send_ntp_request(const ip_addr_t *addr)
-{
-    if (!ntp_pcb) return;
-
-    unsigned char ntp_packet[NTP_PACKET_SIZE] = {0};
-    ntp_packet[0] = 0xE3;
-
-    struct pbuf *p = pbuf_alloc(PBUF_TRANSPORT, NTP_PACKET_SIZE, PBUF_RAM);
-    if (p)
-    {
-        memcpy(p->payload, ntp_packet, NTP_PACKET_SIZE);
-        udp_sendto(ntp_pcb, p, addr, NTP_PORT);
-        pbuf_free(p);
-    }
-}
-
-static void dns_found(const char *name, const ip_addr_t *ipaddr, void *callback_arg)
-{
-    if (ipaddr)
-    {
-        send_ntp_request(ipaddr);
-    }
-}
-
-static void ntp_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *addr, u16_t port)
-{
-    if (p && p->len >= NTP_PACKET_SIZE)
-    {
-        uint8_t *data = (uint8_t *)p->payload;
-        uint32_t ntp_time = (data[40] << 24) | (data[41] << 16) | (data[42] << 8) | data[43];
-        time_t epoch_time = ntp_time - NTP_TIMESTAMP_DELTA;
-        struct tm *utc_time = gmtime(&epoch_time);
-
-        if (utc_time)
-        {
-            current_hour = utc_time->tm_hour + 8;
-            if (current_hour >= 24) current_hour -= 24;
-            current_minute = utc_time->tm_min;
-            time_synced = true;
-            indicate_network_status(3); // NTP OK
-            set_ntp_callback(current_hour, current_minute);
-        }
-    }
-    if (p) pbuf_free(p);
-}
-
 static void service_traffic(void)
 {
     if (received_frame)
@@ -186,6 +128,134 @@ static void service_traffic(void)
     sys_check_timeouts();
 }
 
+static struct tcp_pcb *http_server_pcb = NULL;
+
+static void generate_html_page(char *buffer, size_t buffer_size)
+{
+    snprintf(buffer, buffer_size,
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/html\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+        "<!DOCTYPE html>"
+        "<html>"
+        "<head><meta charset='UTF-8'><title>LED Clock - Time Setup</title></head>"
+        "<body style='font-family: Arial, sans-serif; padding: 40px; max-width: 500px; margin: 0 auto;'>"
+        "<h1 style='color: #333; text-align: center;'>LED Clock - Time Setup</h1>"
+        "<div style='background: #f5f5f5; padding: 30px; border-radius: 10px; margin-top: 20px;'>"
+        "<form method='POST' action='/set'>"
+        "<div style='margin-bottom: 20px;'>"
+        "<label style='display: block; margin-bottom: 8px; font-weight: bold;'>Hour (0-23):</label>"
+        "<input type='number' name='hour' min='0' max='23' value='%02d' style='width: 100%%; padding: 10px; font-size: 16px; border: 2px solid #ddd; border-radius: 5px;'>"
+        "</div>"
+        "<div style='margin-bottom: 20px;'>"
+        "<label style='display: block; margin-bottom: 8px; font-weight: bold;'>Minute (0-59):</label>"
+        "<input type='number' name='minute' min='0' max='59' value='%02d' style='width: 100%%; padding: 10px; font-size: 16px; border: 2px solid #ddd; border-radius: 5px;'>"
+        "</div>"
+        "<button type='submit' style='width: 100%%; padding: 15px; font-size: 18px; background: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold;'>"
+        "Set Time"
+        "</button>"
+        "</form>"
+        "</div>"
+        "<div style='margin-top: 30px; text-align: center; color: #666;'>"
+        "<p>Device Address: 192.168.7.1</p>"
+        "<p>First set static IP on PC to 192.168.7.2</p>"
+        "</div>"
+        "</body>"
+        "</html>",
+        (int)current_hour, (int)current_minute);
+}
+
+static void generate_success_page(char *buffer, size_t buffer_size, int hour, int minute)
+{
+    snprintf(buffer, buffer_size,
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: text/html\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+        "<!DOCTYPE html>"
+        "<html>"
+        "<head><meta charset='UTF-8'><title>Success!</title></head>"
+        "<body style='font-family: Arial, sans-serif; padding: 40px; text-align: center;'>"
+        "<h1 style='color: #4CAF50;'>Time Set Successfully!</h1>"
+        "<div style='background: #e8f5e9; padding: 30px; border-radius: 10px; margin-top: 20px; display: inline-block;'>"
+        "<p style='font-size: 24px; margin: 0;'>Current Time: %02d:%02d</p>"
+        "</div>"
+        "<p style='margin-top: 30px;'><a href='/' style='color: #2196F3; font-size: 18px;'>Back to Setup</a></p>"
+        "</body>"
+        "</html>",
+        hour, minute);
+}
+
+static err_t http_sent(void *arg, struct tcp_pcb *tpcb, u16_t len)
+{
+    (void)arg;
+    (void)len;
+    tcp_close(tpcb);
+    return ERR_OK;
+}
+
+static int parse_post_data(const char *data, int *hour, int *minute)
+{
+    const char *hour_param = strstr(data, "hour=");
+    const char *minute_param = strstr(data, "minute=");
+    
+    if (hour_param && minute_param) {
+        *hour = atoi(hour_param + 5);
+        *minute = atoi(minute_param + 7);
+        return 1;
+    }
+    return 0;
+}
+
+static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
+{
+    (void)arg;
+    (void)err;
+    
+    if (p == NULL) {
+        tcp_close(tpcb);
+        return ERR_OK;
+    }
+    
+    char *request = (char *)p->payload;
+    char response[2048];
+    
+    if (strstr(request, "POST /set") != NULL) {
+        int hour = 0, minute = 0;
+        if (parse_post_data(request, &hour, &minute)) {
+            if (hour >= 0 && hour < 24 && minute >= 0 && minute < 60) {
+                current_hour = hour;
+                current_minute = minute;
+                time_synced = true;
+                indicate_network_status(3);
+                set_ntp_callback(hour, minute);
+                generate_success_page(response, sizeof(response), hour, minute);
+            } else {
+                generate_html_page(response, sizeof(response));
+            }
+        } else {
+            generate_html_page(response, sizeof(response));
+        }
+    } else {
+        generate_html_page(response, sizeof(response));
+    }
+    
+    tcp_write(tpcb, response, strlen(response), TCP_WRITE_FLAG_COPY);
+    tcp_sent(tpcb, http_sent);
+    
+    pbuf_free(p);
+    return ERR_OK;
+}
+
+static err_t http_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
+{
+    (void)arg;
+    (void)err;
+    tcp_recv(newpcb, http_recv);
+    return ERR_OK;
+}
+
 void net_init(void)
 {
     lwip_init();
@@ -194,32 +264,19 @@ void net_init(void)
     netif_set_default(&netif);
     netif_set_up(&netif);
     
-    indicate_network_status(1); // Link up
-
-    ntp_pcb = udp_new();
-    if (ntp_pcb)
-    {
-        udp_recv(ntp_pcb, ntp_recv, NULL);
+    indicate_network_status(1);
+    
+    http_server_pcb = tcp_new();
+    if (http_server_pcb) {
+        ip4_addr_t any_addr;
+        IP4_ADDR(&any_addr, 0, 0, 0, 0);
+        tcp_bind(http_server_pcb, &any_addr, 80);
+        http_server_pcb = tcp_listen(http_server_pcb);
+        tcp_accept(http_server_pcb, http_accept);
     }
     
-    // 配置 DNS 服务器
-    ip_addr_t dns_addr;
-    IP4_ADDR(&dns_addr, 8, 8, 8, 8);
-    dns_setserver(0, &dns_addr);
-    
-    // 初始化 DHCP 和 DNS 服务器
     dhserv_init(&dhcp_config);
     dnserv_init(&ipaddr, 53, dns_query_proc);
-}
-
-void net_request_ntp(void)
-{
-    if (!ntp_requested)
-    {
-        ntp_requested = true;
-        indicate_network_status(2); // DHCP/IP ready
-        dns_gethostbyname("pool.ntp.org", NULL, dns_found, NULL);
-    }
 }
 
 void net_task(void)
@@ -230,12 +287,7 @@ void net_task(void)
     if (netif_is_link_up(&netif) && !network_connected)
     {
         network_connected = true;
-    }
-    
-    if (network_connected && !ntp_triggered && time_us_32() > 3000000) // 3秒后请求NTP
-    {
-        ntp_triggered = true;
-        net_request_ntp();
+        indicate_network_status(2);
     }
 }
 
@@ -248,3 +300,4 @@ bool net_time_synced(void)
 {
     return time_synced;
 }
+
