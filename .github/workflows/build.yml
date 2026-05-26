@@ -1,0 +1,60 @@
+name: Build Firmware
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  release:
+    types: [ created ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake gcc-arm-none-eabi libnewlib-arm-none-eabi build-essential
+
+    - name: Clone Pico SDK
+      run: |
+        git clone --depth 1 --branch 2.2.0 https://github.com/raspberrypi/pico-sdk.git
+        cd pico-sdk
+        git submodule update --init
+
+    - name: Configure CMake
+      run: |
+        mkdir -p build
+        cd build
+        cmake .. -DPICO_SDK_PATH=$PWD/../pico-sdk -DPICO_BOARD=waveshare_rp2350_one
+
+    - name: Build firmware
+      run: |
+        cd build
+        make -j$(nproc)
+
+    - name: Upload firmware artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: firmware
+        path: |
+          build/led_visual_clock.uf2
+          build/led_visual_clock.elf
+          build/led_visual_clock.hex
+        if-no-files-found: error
+
+    - name: Upload release assets
+      if: github.event_name == 'release'
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          build/led_visual_clock.uf2
+          build/led_visual_clock.elf
+          build/led_visual_clock.hex
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
