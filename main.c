@@ -161,7 +161,7 @@ void fsm_update(fsm_t *fsm) {
                 if (!fsm->led_on && elapsed >= 800) {
                     fsm->led_on = true;
                     fsm->last_tick = now;
-                    set_ws2812(255, 0, 0);
+                    set_ws2812(0, 255, 0);
                 } else if (fsm->led_on && elapsed >= 800) {
                     fsm->led_on = false;
                     fsm->blink_count++;
@@ -214,7 +214,7 @@ void fsm_update(fsm_t *fsm) {
                 if (!fsm->led_on && elapsed >= 500) {
                     fsm->led_on = true;
                     fsm->last_tick = now;
-                    set_ws2812(0, 255, 0);
+                    set_ws2812(255, 0, 0);
                 } else if (fsm->led_on && elapsed >= 500) {
                     fsm->led_on = false;
                     fsm->blink_count++;
