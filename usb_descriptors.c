@@ -25,6 +25,12 @@
 
 #include "tusb.h"
 
+/* A combination of interfaces must have a unique product id, since PC will save device driver after the first plug.
+ * Same VID/PID with different interface e.g MSC (first), then CDC (later) will possibly cause system error on PC.
+ */
+#define _PID_MAP(itf, n)  ( (CFG_TUD_##itf) << (n) )
+#define USB_PID           (0x4000 | _PID_MAP(ECM_RNDIS, 5))
+
 extern uint8_t tud_network_mac_address[6];
 
 // String Descriptor Index
@@ -38,20 +44,22 @@ enum
   STRID_MAC
 };
 
-// Interface Numbers for CDC-ECM
 enum
 {
-  ITF_NUM_CDC_ECM = 0,
-  ITF_NUM_CDC_ECM_DATA,
+  ITF_NUM_CDC = 0,
+  ITF_NUM_CDC_DATA,
   ITF_NUM_TOTAL
 };
 
-// Endpoint Numbers
 enum
 {
-  EPNUM_NET_NOTIF = 0x81,
-  EPNUM_NET_OUT   = 0x02,
-  EPNUM_NET_IN    = 0x82
+#if CFG_TUD_ECM_RNDIS
+  CONFIG_ID_RNDIS = 0,
+  CONFIG_ID_ECM   = 1,
+#else
+  CONFIG_ID_NCM   = 0,
+#endif
+  CONFIG_ID_COUNT
 };
 
 //--------------------------------------------------------------------+
@@ -61,9 +69,8 @@ tusb_desc_device_t const desc_device =
 {
     .bLength            = sizeof(tusb_desc_device_t),
     .bDescriptorType    = TUSB_DESC_DEVICE,
-    .bcdUSB             = 0x0200, // USB 2.0
-    
-    // Use Interface Association Descriptor (IAD) for CDC-ECM
+    .bcdUSB             = 0x0200,
+    // Use Interface Association Descriptor (IAD) device class
     .bDeviceClass       = TUSB_CLASS_MISC,
     .bDeviceSubClass    = MISC_SUBCLASS_COMMON,
     .bDeviceProtocol    = MISC_PROTOCOL_IAD,
@@ -71,14 +78,14 @@ tusb_desc_device_t const desc_device =
     .bMaxPacketSize0    = CFG_TUD_ENDPOINT0_SIZE,
 
     .idVendor           = 0xCafe,
-    .idProduct          = 0x4000, // Fixed PID for consistency
+    .idProduct          = USB_PID,
     .bcdDevice          = 0x0101,
 
     .iManufacturer      = STRID_MANUFACTURER,
     .iProduct           = STRID_PRODUCT,
     .iSerialNumber      = STRID_SERIAL,
 
-    .bNumConfigurations = 1
+    .bNumConfigurations = 1 // single configuration for simplicity
 };
 
 // Invoked when received GET DEVICE DESCRIPTOR
@@ -90,41 +97,40 @@ uint8_t const * tud_descriptor_device_cb(void)
 //--------------------------------------------------------------------+
 // Configuration Descriptor
 //--------------------------------------------------------------------+
+#define MAIN_CONFIG_TOTAL_LEN    (TUD_CONFIG_DESC_LEN + TUD_RNDIS_DESC_LEN)
 
-// Calculate total length using TinyUSB macros for CDC-ECM
-#define CONFIG_TOTAL_LEN  (TUD_CONFIG_DESC_LEN + TUD_CDC_ECM_DESC_LEN)
+#define EPNUM_NET_NOTIF   0x81
+#define EPNUM_NET_OUT     0x02
+#define EPNUM_NET_IN      0x82
 
-// CDC-ECM Configuration Descriptor
-// TUD_CDC_ECM_DESCRIPTOR(_itfnum, _desc_stridx, _mac_stridx, _ep_notif, _ep_notif_size, _epout, _epin, _epsize, _maxsegmentsize)
-// _maxsegmentsize is typically the MTU (1500)
-uint8_t const desc_configuration[] =
+static uint8_t const rndis_configuration[] =
 {
-  // Config number, interface count, string index, total length, attribute, power in mA
-  TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0, 100),
+  // Config number (index+1), interface count, string index, total length, attribute, power in mA
+  TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, MAIN_CONFIG_TOTAL_LEN, 0, 100),
 
-  // CDC-ECM Interface Descriptor
-  TUD_CDC_ECM_DESCRIPTOR(ITF_NUM_CDC_ECM, STRID_INTERFACE, STRID_MAC, EPNUM_NET_NOTIF, 64, EPNUM_NET_OUT, EPNUM_NET_IN, CFG_TUD_NET_ENDPOINT_SIZE, 1500),
+  // Interface number, string index, EP notification address and size, EP data address (out, in) and size.
+  TUD_RNDIS_DESCRIPTOR(ITF_NUM_CDC, STRID_INTERFACE, EPNUM_NET_NOTIF, 8, EPNUM_NET_OUT, EPNUM_NET_IN, CFG_TUD_NET_ENDPOINT_SIZE),
 };
 
 // Invoked when received GET CONFIGURATION DESCRIPTOR
 uint8_t const * tud_descriptor_configuration_cb(uint8_t index)
 {
-  (void) index;
-  return desc_configuration;
+  (void) index; // For simplicity always return rndis configuration
+  return rndis_configuration;
 }
 
 //--------------------------------------------------------------------+
 // String Descriptors
 //--------------------------------------------------------------------+
 
+// array of pointer to string descriptors
 static char const* string_desc_arr [] =
 {
-  [STRID_LANGID]       = (const char[]) { 0x09, 0x04 }, // English
-  [STRID_MANUFACTURER] = "LED Clock",
-  [STRID_PRODUCT]      = "Visual Clock Network Device",
-  [STRID_SERIAL]       = "000000000001",
-  [STRID_INTERFACE]    = "CDC-ECM Network Interface",
-  [STRID_MAC]          = "" // Placeholder, handled by callback
+  [STRID_LANGID]       = (const char[]) { 0x09, 0x04 }, // supported language is English (0x0409)
+  [STRID_MANUFACTURER] = "LED Clock",                   // Manufacturer
+  [STRID_PRODUCT]      = "Visual Clock Network Device", // Product
+  [STRID_SERIAL]       = "000000000001",                // Serial
+  [STRID_INTERFACE]    = "LED Clock Network Interface"  // Interface Description
 };
 
 static uint16_t _desc_str[32 + 1];
@@ -141,8 +147,7 @@ uint16_t const* tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
       break;
 
     case STRID_MAC:
-      // Convert MAC address into UTF-16 Hex String
-      // macOS uses this to identify the device uniquely
+      // Convert MAC address into UTF-16
       for (unsigned i=0; i<sizeof(tud_network_mac_address); i++) {
         _desc_str[1+chr_count++] = "0123456789ABCDEF"[(tud_network_mac_address[i] >> 4) & 0xf];
         _desc_str[1+chr_count++] = "0123456789ABCDEF"[(tud_network_mac_address[i] >> 0) & 0xf];
@@ -151,22 +156,22 @@ uint16_t const* tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
 
     default:
       if ( !(index < sizeof(string_desc_arr) / sizeof(string_desc_arr[0])) ) return NULL;
-      
-      // Skip empty placeholders
-      if (index == STRID_MAC && strlen(string_desc_arr[STRID_MAC]) == 0) return NULL;
 
       const char *str = string_desc_arr[index];
 
+      // Cap at max char
       chr_count = strlen(str);
-      size_t const max_count = sizeof(_desc_str) / sizeof(_desc_str[0]) - 1;
+      size_t const max_count = sizeof(_desc_str) / sizeof(_desc_str[0]) - 1; // -1 for string type
       if ( chr_count > max_count ) chr_count = max_count;
 
+      // Convert ASCII string into UTF-16
       for ( size_t i = 0; i < chr_count; i++ ) {
         _desc_str[1 + i] = str[i];
       }
       break;
   }
 
+  // first byte is length (including header), second byte is string type
   _desc_str[0] = (uint16_t) ((TUSB_DESC_STRING << 8 ) | (2*chr_count + 2));
 
   return _desc_str;
