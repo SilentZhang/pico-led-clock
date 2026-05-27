@@ -11,7 +11,7 @@
 #include "lwip/ip_addr.h"
 #include "netif/etharp.h"
 #include "tusb.h"
-// #include "rndis_protocol.h" // Removed: Not needed for ECM
+#include "rndis_protocol.h"
 #include "dhserver.h"
 #include "dnserver.h"
 #include <string.h>
@@ -263,8 +263,7 @@ void net_init(void) {
 
     netif.hwaddr_len = sizeof(tud_network_mac_address);
     memcpy(netif.hwaddr, tud_network_mac_address, sizeof(tud_network_mac_address));
-    // Toggle last bit for uniqueness if needed, but consistent MAC is better for DHCP leases
-    // netif.hwaddr[5] ^= 0x01; 
+    netif.hwaddr[5] ^= 0x01;
 
     netif_add(&netif, &ipaddr, &netmask, &gateway, NULL, our_netif_init, ethernet_input);
     netif_set_default(&netif);
