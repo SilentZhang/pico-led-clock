@@ -95,14 +95,15 @@ uint8_t const * tud_descriptor_device_cb(void)
 #define CONFIG_TOTAL_LEN  (TUD_CONFIG_DESC_LEN + TUD_CDC_ECM_DESC_LEN)
 
 // CDC-ECM Configuration Descriptor
-// TUD_CDC_ECM_DESCRIPTOR(ifnum, _stridx, mac_stridx, ep_notif, ep_notif_size, ep_out, ep_in, ep_size)
+// TUD_CDC_ECM_DESCRIPTOR(_itfnum, _desc_stridx, _mac_stridx, _ep_notif, _ep_notif_size, _epout, _epin, _epsize, _maxsegmentsize)
+// _maxsegmentsize is typically the MTU (1500)
 uint8_t const desc_configuration[] =
 {
   // Config number, interface count, string index, total length, attribute, power in mA
   TUD_CONFIG_DESCRIPTOR(1, ITF_NUM_TOTAL, 0, CONFIG_TOTAL_LEN, 0, 100),
 
-  // CDC-ECM Interface Descriptor (Control + Data interfaces combined in macro)
-  TUD_CDC_ECM_DESCRIPTOR(ITF_NUM_CDC_ECM, STRID_INTERFACE, STRID_MAC, EPNUM_NET_NOTIF, 64, EPNUM_NET_OUT, EPNUM_NET_IN, CFG_TUD_NET_ENDPOINT_SIZE),
+  // CDC-ECM Interface Descriptor
+  TUD_CDC_ECM_DESCRIPTOR(ITF_NUM_CDC_ECM, STRID_INTERFACE, STRID_MAC, EPNUM_NET_NOTIF, 64, EPNUM_NET_OUT, EPNUM_NET_IN, CFG_TUD_NET_ENDPOINT_SIZE, 1500),
 };
 
 // Invoked when received GET CONFIGURATION DESCRIPTOR
