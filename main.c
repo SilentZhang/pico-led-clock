@@ -181,7 +181,6 @@ void fsm_update(fsm_t *fsm) {
     
     switch (fsm->current_state) {
         case STATE_IDLE:
-            debug_print("fsm_update: STATE_IDLE, last_display_time=%llu, now_us=%llu\n", last_display_time, now_us);
             if (now_us - last_display_time >= 3000000) {
                 debug_print("fsm_update: Starting display after 3 seconds idle\n");
                 start_display();
@@ -190,7 +189,6 @@ void fsm_update(fsm_t *fsm) {
             break;
             
         case STATE_BLINK_HOUR:
-            debug_print("fsm_update: STATE_BLINK_HOUR, blink_count=%d, blink_total=%d, led_on=%d\n", fsm->blink_count, fsm->blink_total, fsm->led_on);
             if (fsm->blink_count < fsm->blink_total) {
                 uint32_t elapsed = now - fsm->last_tick;
                 
@@ -198,49 +196,43 @@ void fsm_update(fsm_t *fsm) {
                     fsm->led_on = true;
                     fsm->last_tick = now;
                     set_ws2812(0, 255, 0);
-                    debug_print("fsm_update: LED ON (green) for hour blink\n");
                 } else if (fsm->led_on && elapsed >= 800) {
                     fsm->led_on = false;
                     fsm->blink_count++;
                     fsm->last_tick = now;
                     all_leds_off();
-                    debug_print("fsm_update: LED OFF, blink_count=%d\n", fsm->blink_count);
                     
                     if (fsm->blink_count % 3 == 0 && fsm->blink_count < fsm->blink_total) {
                         fsm->transition_active = true;
                         fsm->transition_start = now;
-                        debug_print("fsm_update: Long pause after 3 blinks\n");
                     }
                 }
                 
                 if (fsm->transition_active && (now - fsm->transition_start >= 1500)) {
                     fsm->transition_active = false;
                     fsm->last_tick = now;
-                    debug_print("fsm_update: Long pause ended\n");
                 }
             } else {
                 fsm->transition_start = now;
                 fsm->current_state = STATE_TRANSITION_1;
                 all_leds_off();
-                debug_print("fsm_update: Transition to STATE_TRANSITION_1\n");
+                debug_print("fsm: Hour blinks done, transitioning\n");
             }
             break;
             
         case STATE_TRANSITION_1:
-            debug_print("fsm_update: STATE_TRANSITION_1, elapsed=%d ms\n", now - fsm->transition_start);
             if (now - fsm->transition_start >= 1500) {
-                debug_print("fsm_update: Transition 1 complete, n_quarter=%d, n_minute_rem=%d\n", current_time.n_quarter, current_time.n_minute_rem);
                 if (current_time.n_quarter == 0) {
                     if (current_time.n_minute_rem == 0) {
                         fsm->current_state = STATE_IDLE;
-                        debug_print("fsm_update: Transition to STATE_IDLE (no quarters, no minutes)\n");
+                        debug_print("fsm: Display complete, returning to idle\n");
                     } else {
                         fsm->blink_count = 0;
                         fsm->blink_total = current_time.n_minute_rem;
                         fsm->led_on = false;
                         fsm->last_tick = now;
                         fsm->current_state = STATE_BLINK_MINUTE;
-                        debug_print("fsm_update: Transition to STATE_BLINK_MINUTE (total=%d)\n", fsm->blink_total);
+                        debug_print("fsm: Starting minute blinks (%d)\n", fsm->blink_total);
                     }
                 } else {
                     fsm->blink_count = 0;
@@ -248,13 +240,12 @@ void fsm_update(fsm_t *fsm) {
                     fsm->led_on = false;
                     fsm->last_tick = now;
                     fsm->current_state = STATE_BLINK_QUARTER;
-                    debug_print("fsm_update: Transition to STATE_BLINK_QUARTER (total=%d)\n", fsm->blink_total);
+                    debug_print("fsm: Starting quarter blinks (%d)\n", fsm->blink_total);
                 }
             }
             break;
             
         case STATE_BLINK_QUARTER:
-            debug_print("fsm_update: STATE_BLINK_QUARTER, blink_count=%d, blink_total=%d, led_on=%d\n", fsm->blink_count, fsm->blink_total, fsm->led_on);
             if (fsm->blink_count < fsm->blink_total) {
                 uint32_t elapsed = now - fsm->last_tick;
                 
@@ -262,41 +253,35 @@ void fsm_update(fsm_t *fsm) {
                     fsm->led_on = true;
                     fsm->last_tick = now;
                     set_ws2812(255, 0, 0);
-                    debug_print("fsm_update: LED ON (red) for quarter blink\n");
                 } else if (fsm->led_on && elapsed >= 500) {
                     fsm->led_on = false;
                     fsm->blink_count++;
                     fsm->last_tick = now;
                     all_leds_off();
-                    debug_print("fsm_update: LED OFF, blink_count=%d\n", fsm->blink_count);
                 }
             } else {
                 fsm->transition_start = now;
                 fsm->current_state = STATE_TRANSITION_2;
-                debug_print("fsm_update: Transition to STATE_TRANSITION_2\n");
             }
             break;
             
         case STATE_TRANSITION_2:
-            debug_print("fsm_update: STATE_TRANSITION_2, elapsed=%d ms\n", now - fsm->transition_start);
             if (now - fsm->transition_start >= 1500) {
-                debug_print("fsm_update: Transition 2 complete, n_minute_rem=%d\n", current_time.n_minute_rem);
                 if (current_time.n_minute_rem == 0) {
                     fsm->current_state = STATE_IDLE;
-                    debug_print("fsm_update: Transition to STATE_IDLE (no minutes)\n");
+                    debug_print("fsm: Display complete, returning to idle\n");
                 } else {
                     fsm->blink_count = 0;
                     fsm->blink_total = current_time.n_minute_rem;
                     fsm->led_on = false;
                     fsm->last_tick = now;
                     fsm->current_state = STATE_BLINK_MINUTE;
-                    debug_print("fsm_update: Transition to STATE_BLINK_MINUTE (total=%d)\n", fsm->blink_total);
+                    debug_print("fsm: Starting minute blinks (%d)\n", fsm->blink_total);
                 }
             }
             break;
             
         case STATE_BLINK_MINUTE:
-            debug_print("fsm_update: STATE_BLINK_MINUTE, blink_count=%d, blink_total=%d, led_on=%d\n", fsm->blink_count, fsm->blink_total, fsm->led_on);
             if (fsm->blink_count < fsm->blink_total) {
                 uint32_t elapsed = now - fsm->last_tick;
                 
@@ -304,17 +289,15 @@ void fsm_update(fsm_t *fsm) {
                     fsm->led_on = true;
                     fsm->last_tick = now;
                     set_ws2812(0, 0, 255);
-                    debug_print("fsm_update: LED ON (blue) for minute blink\n");
                 } else if (fsm->led_on && elapsed >= 400) {
                     fsm->led_on = false;
                     fsm->blink_count++;
                     fsm->last_tick = now;
                     all_leds_off();
-                    debug_print("fsm_update: LED OFF, blink_count=%d\n", fsm->blink_count);
                 }
             } else {
                 fsm->current_state = STATE_IDLE;
-                debug_print("fsm_update: Transition to STATE_IDLE (minute blinks complete)\n");
+                debug_print("fsm: Display complete, returning to idle\n");
             }
             break;
     }
