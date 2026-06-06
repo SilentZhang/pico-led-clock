@@ -5,6 +5,8 @@
 #include <stdbool.h>
 
 #define WS2812_PIN 16
+// BOOT 按键连接到 QSPI_SS 引脚，需要特殊方式读取
+// CS_PIN_INDEX = 1 (QSPI_SS 的索引，不是 GPIO 编号)
 
 typedef enum {
     STATE_IDLE,

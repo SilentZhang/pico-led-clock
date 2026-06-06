@@ -5,6 +5,10 @@
 #include <stdarg.h>
 #include "pico/stdlib.h"
 #include "hardware/pio.h"
+#include "hardware/gpio.h"
+#include "hardware/sync.h"
+#include "hardware/structs/ioqspi.h"
+#include "hardware/structs/sio.h"
 #include "pico/time.h"
 #include "tusb.h"
 #include "led_clock.h"
@@ -22,6 +26,229 @@ static uint64_t last_time_update = 0;
 static uint64_t last_display_time = 0;
 bool time_synced = false;
 static uint8_t network_status = 0; // 0: no link, 1: link up, 2: dhcp ok, 3: ntp ok
+
+// 离线时间设置 - 按钮状态机
+typedef enum {
+    BTN_WAIT_FIRST,      // 等待第一轮按键（小时）
+    BTN_WAIT_SECOND,     // 等待第二轮按键（刻钟）
+    BTN_WAIT_THIRD,      // 等待第三轮按键（残余分钟）
+    BTN_DONE            // 设置完成
+} btn_set_state_t;
+
+static btn_set_state_t btn_set_state = BTN_WAIT_FIRST;
+static uint32_t btn_count_hour = 0;
+static uint32_t btn_count_quarter = 0;
+static uint32_t btn_count_minute = 0;
+static uint64_t btn_last_press_time = 0;
+static bool btn_was_pressed = false;
+static uint32_t btn_this_press_count = 0;
+
+void offline_time_set_init(void);
+void offline_time_set_update(void);
+void debug_print(const char *format, ...);
+
+// 读取 BOOTSEL 按钮 - 必须在 RAM 中运行
+// 参考: https://github.com/raspberrypi/pico-examples/blob/master/picoboard/button/button.c
+bool __no_inline_not_in_flash_func(read_bootsel_button)() {
+    const uint CS_PIN_INDEX = 1; // QSPI_SS 的索引
+    
+    // 必须禁用中断，因为中断处理程序可能在 flash 中
+    uint32_t flags = save_and_disable_interrupts();
+    
+    // 将 chip select 设置为 Hi-Z (输出禁用)
+    hw_write_masked(&ioqspi_hw->io[CS_PIN_INDEX].ctrl,
+        GPIO_OVERRIDE_LOW << IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_LSB,
+        IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_BITS);
+    
+    // 等待一小段时间让引脚稳定
+    for (volatile int i = 0; i < 1000; ++i);
+    
+    // 使用 SIO 的 HI GPIO 寄存器读取 QSPI 引脚
+    // 按钮按下时为低电平
+    #if PICO_RP2040
+    #define CS_BIT (1u << 1)
+    #else
+    #define CS_BIT SIO_GPIO_HI_IN_QSPI_CSN_BITS
+    #endif
+    bool button_state = !(sio_hw->gpio_hi_in & CS_BIT);
+    
+    // 恢复 chip select 的状态
+    hw_write_masked(&ioqspi_hw->io[CS_PIN_INDEX].ctrl,
+        GPIO_OVERRIDE_NORMAL << IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_LSB,
+        IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_BITS);
+    
+    restore_interrupts(flags);
+    return button_state;
+}
+
+void offline_time_set_init(void) {
+    btn_set_state = BTN_WAIT_FIRST;
+    btn_count_hour = 0;
+    btn_count_quarter = 0;
+    btn_count_minute = 0;
+    btn_last_press_time = 0;
+    btn_was_pressed = false;
+    btn_this_press_count = 0;
+}
+
+void offline_time_set_update(void) {
+    uint64_t now = to_us_since_boot(get_absolute_time());
+    // 使用特殊方法读取 BOOTSEL 按钮
+    bool btn_pressed = read_bootsel_button();
+    
+    // 每秒输出一次按钮状态用于调试
+    static uint64_t last_btn_debug = 0;
+    if (now - last_btn_debug >= 1000000) {
+        debug_print("BOOTSEL: pressed=%d\n", btn_pressed);
+        last_btn_debug = now;
+    }
+    
+    switch (btn_set_state) {
+        case BTN_WAIT_FIRST:
+            if (btn_pressed && !btn_was_pressed) {
+                // 按键按下，计数增加
+                btn_this_press_count++;
+                btn_last_press_time = now;
+                debug_print("offline: Hour press count=%d\n", btn_this_press_count);
+            } else if (!btn_pressed && btn_was_pressed) {
+                // 按键刚刚释放，更新时间为释放时间
+                btn_last_press_time = now;
+            } else if (!btn_pressed && !btn_was_pressed && btn_this_press_count > 0) {
+                // 按键释放后，检查空闲时间
+                uint32_t idle_time = now - btn_last_press_time;
+                
+                // 超过5秒，重置
+                if (idle_time > 5000000) {
+                    debug_print("offline: Idle timeout (>5s), resetting\n");
+                    offline_time_set_init();
+                    break;
+                }
+                
+                // 超过1秒，结束这轮
+                if (idle_time > 1000000) {
+                    btn_count_hour = btn_this_press_count;
+                    if (btn_count_hour > 12) btn_count_hour = 12;
+                    btn_set_state = BTN_WAIT_SECOND;
+                    btn_last_press_time = now;
+                    btn_this_press_count = 0;
+                    debug_print("offline: Hour=%d, waiting for quarter (1-5s)\n", btn_count_hour);
+                }
+            }
+            break;
+            
+        case BTN_WAIT_SECOND:
+            // 检查空闲超时（超过5秒丢弃）
+            if (!btn_pressed && !btn_was_pressed && btn_this_press_count == 0) {
+                uint32_t idle_time = now - btn_last_press_time;
+                if (idle_time > 5000000) {
+                    debug_print("offline: Idle timeout (>5s), resetting\n");
+                    offline_time_set_init();
+                    break;
+                }
+            }
+            
+            if (btn_pressed && !btn_was_pressed) {
+                // 按键按下，计数增加
+                btn_this_press_count++;
+                btn_last_press_time = now;
+                debug_print("offline: Quarter press count=%d\n", btn_this_press_count);
+            } else if (!btn_pressed && btn_was_pressed) {
+                // 按键刚刚释放，更新时间为释放时间
+                btn_last_press_time = now;
+            } else if (!btn_pressed && !btn_was_pressed && btn_this_press_count > 0) {
+                // 按键释放后，检查空闲时间
+                uint32_t idle_time = now - btn_last_press_time;
+                
+                // 超过5秒，重置
+                if (idle_time > 5000000) {
+                    debug_print("offline: Idle timeout (>5s), resetting\n");
+                    offline_time_set_init();
+                    break;
+                }
+                
+                // 超过1秒，结束这轮
+                if (idle_time > 1000000) {
+                    // 按住超过3次计为0刻钟
+                    if (btn_this_press_count > 3) {
+                        btn_count_quarter = 0;
+                    } else {
+                        btn_count_quarter = btn_this_press_count;
+                    }
+                    btn_set_state = BTN_WAIT_THIRD;
+                    btn_last_press_time = now;
+                    btn_this_press_count = 0;
+                    debug_print("offline: Quarter=%d, waiting for minute (1-5s)\n", btn_count_quarter);
+                }
+            }
+            break;
+            
+        case BTN_WAIT_THIRD:
+            // 检查空闲超时（超过5秒丢弃）
+            if (!btn_pressed && !btn_was_pressed && btn_this_press_count == 0) {
+                uint32_t idle_time = now - btn_last_press_time;
+                if (idle_time > 5000000) {
+                    debug_print("offline: Idle timeout (>5s), resetting\n");
+                    offline_time_set_init();
+                    break;
+                }
+            }
+            
+            if (btn_pressed && !btn_was_pressed) {
+                // 按键按下，计数增加
+                btn_this_press_count++;
+                btn_last_press_time = now;
+                debug_print("offline: Minute press count=%d\n", btn_this_press_count);
+            } else if (!btn_pressed && btn_was_pressed) {
+                // 按键刚刚释放，更新时间为释放时间
+                btn_last_press_time = now;
+            } else if (!btn_pressed && !btn_was_pressed && btn_this_press_count > 0) {
+                // 按键释放后，检查空闲时间
+                uint32_t idle_time = now - btn_last_press_time;
+                
+                // 超过5秒，重置
+                if (idle_time > 5000000) {
+                    debug_print("offline: Idle timeout (>5s), resetting\n");
+                    offline_time_set_init();
+                    break;
+                }
+                
+                // 超过1秒，结束这轮，设置时间
+                if (idle_time > 1000000) {
+                    // 按住超过15次计为0分钟
+                    if (btn_this_press_count > 15) {
+                        btn_count_minute = 0;
+                    } else {
+                        btn_count_minute = btn_this_press_count;
+                    }
+                    
+                    // 计算实际时间
+                    current_hour = btn_count_hour;
+                    current_minute = btn_count_quarter * 15 + btn_count_minute;
+                    if (current_minute >= 60) current_minute = 59;
+                    current_second = 0;
+                    last_time_update = now;
+                    time_synced = true;
+                    
+                    debug_print("offline: Time set to %02d:%02d:%02d\n", current_hour, current_minute, current_second);
+                    
+                    btn_set_state = BTN_DONE;
+                    btn_last_press_time = now;
+                    btn_this_press_count = 0;
+                }
+            }
+            break;
+            
+        case BTN_DONE:
+            // 等待5秒后可以开始新的设置
+            if (now - btn_last_press_time > 5000000) {
+                offline_time_set_init();
+                debug_print("offline: Ready for new setting\n");
+            }
+            break;
+    }
+    
+    btn_was_pressed = btn_pressed;
+}
 
 void debug_print(const char *format, ...) {
     va_list args;
@@ -305,6 +532,11 @@ void fsm_update(fsm_t *fsm) {
 
 int main(void) {
     ws2812_init();
+    
+    // BOOTSEL 按钮连接到 QSPI_SS，使用特殊方法读取
+    // 不需要 GPIO 初始化
+    debug_print("BOOTSEL button ready (using QSPI_SS method)\n");
+    
     tusb_init();
     
     debug_print("=== LED Clock Booting ===\n");
@@ -314,6 +546,7 @@ int main(void) {
     debug_print("Network initialized\n");
     
     fsm_init(&fsm);
+    offline_time_set_init();
     
     last_time_update = to_us_since_boot(get_absolute_time());
     last_display_time = last_time_update;
@@ -329,6 +562,7 @@ int main(void) {
         tud_task();
         update_time();
         net_task();
+        offline_time_set_update();  // 处理离线时间设置按钮
         fsm_update(&fsm);
         
         uint64_t now = to_us_since_boot(get_absolute_time());
