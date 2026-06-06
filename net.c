@@ -18,11 +18,12 @@
 #include <stdio.h>
 
 static struct netif netif;
-static uint32_t current_hour = 0;
-static uint32_t current_minute = 0;
-static uint32_t current_second = 0;
-static bool time_synced = false;
 static bool network_connected = false;
+
+extern uint32_t current_hour;
+extern uint32_t current_minute;
+extern uint32_t current_second;
+extern bool time_synced;
 
 static struct pbuf *received_frame;
 
@@ -119,9 +120,17 @@ static void service_traffic(void) {
 static struct tcp_pcb *http_server_pcb = NULL;
 
 typedef struct {
+    // 发送响应用
     char *data;
     int offset;
     int total_len;
+    
+    // 接收请求用
+    char *request_data;      // 已接收的请求数据
+    int request_len;         // 已接收的长度
+    int content_length;      // POST body 长度
+    int header_len;          // HTTP 头长度
+    bool receiving_post;     // 是否正在接收 POST 请求
 } http_state_t;
 
 static err_t http_sent(void *arg, struct tcp_pcb *tpcb, u16_t len) {
@@ -154,58 +163,251 @@ static int parse_post_data(const char *data, int *hour, int *minute, int *second
         *hour = atoi(hour_param + 5);
         *minute = atoi(minute_param + 7);
         *second = atoi(second_param + 7);
+        printf("Parsed time: %02d:%02d:%02d\n", *hour, *minute, *second);
         return 1;
     }
     return 0;
 }
 
 static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
-    (void)arg;
-    (void)err;
-
+    http_state_t *state = (http_state_t *)arg;
+    char debug_buf[128];
+    
     if (p == NULL) {
+        // 连接关闭，清理状态
+        if (state) {
+            if (state->request_data) free(state->request_data);
+            if (state->data) free(state->data);
+            free(state);
+        }
+        tcp_close(tpcb);
         return ERR_OK;
     }
-
-    char *request = (char *)p->payload;
-
-    if (strstr(request, "POST /set") != NULL) {
-        int hour = 0, minute = 0, second = 0;
-        if (parse_post_data(request, &hour, &minute, &second)) {
-            if (hour >= 0 && hour < 24 && minute >= 0 && minute < 60 && second >= 0 && second < 60) {
-                current_hour = hour;
-                current_minute = minute;
-                current_second = second;
-                time_synced = true;
-                indicate_network_status(3);
-                set_ntp_callback(hour, minute, second);
-
-                char *buf = (char *)malloc(512);
-                int len = snprintf(buf, 512,
-                    "HTTP/1.1 200 OK\r\n"
-                    "Content-Type: text/html\r\n"
-                    "Connection: close\r\n"
-                    "\r\n"
-                    "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>OK</title></head>"
-                    "<body style='font-family:Arial;padding:20px;text-align:center;'>"
-                    "<h1 style='color:#4CAF50;'>Time Set!</h1>"
-                    "<p style='font-size:24px;'>%02d:%02d:%02d</p>"
-                    "<p><a href='/'>Back</a></p>"
-                    "</body></html>",
-                    hour, minute, second);
+    
+    // 获取当前包的数据
+    int total_len = p->tot_len;
+    int debug_len = snprintf(debug_buf, sizeof(debug_buf), "[HTTP] Received pbuf: len=%d, tot_len=%d\n", p->len, total_len);
+    tud_cdc_write(debug_buf, debug_len);
+    tud_cdc_write_flush();
+    
+    // 从pbuf链表复制数据
+    char *current_data = (char *)malloc(total_len + 1);
+    if (!current_data) {
+        pbuf_free(p);
+        return ERR_OK;
+    }
+    char *ptr = current_data;
+    struct pbuf *q = p;
+    while (q != NULL) {
+        memcpy(ptr, q->payload, q->len);
+        ptr += q->len;
+        q = q->next;
+    }
+    current_data[total_len] = '\0';
+    
+    // 检查是否正在接收 POST body
+    if (state && state->receiving_post) {
+        // 追加新数据到已保存的数据
+        int new_len = state->request_len + total_len;
+        char *combined = (char *)realloc(state->request_data, new_len + 1);
+        if (!combined) {
+            free(current_data);
+            pbuf_free(p);
+            return ERR_OK;
+        }
+        state->request_data = combined;
+        memcpy(state->request_data + state->request_len, current_data, total_len);
+        state->request_len = new_len;
+        state->request_data[new_len] = '\0';
+        free(current_data);
+        
+        debug_len = snprintf(debug_buf, sizeof(debug_buf), "[HTTP] Appended data, total=%d, need body=%d\n", 
+                            state->request_len, state->content_length);
+        tud_cdc_write(debug_buf, debug_len);
+        tud_cdc_write_flush();
+        
+        // 检查是否已接收完整 body
+        int body_len = state->request_len - state->header_len;
+        if (body_len >= state->content_length) {
+            // 完整请求，处理它
+            const char *body_start = state->request_data + state->header_len;
+            debug_len = snprintf(debug_buf, sizeof(debug_buf), "[HTTP] Complete POST body: %.*s\n", 
+                                state->content_length, body_start);
+            tud_cdc_write(debug_buf, debug_len);
+            tud_cdc_write_flush();
+            
+            int hour = 0, minute = 0, second = 0;
+            if (parse_post_data(body_start, &hour, &minute, &second)) {
+                debug_len = snprintf(debug_buf, sizeof(debug_buf), "[HTTP] Parsed time: %02d:%02d:%02d\n", hour, minute, second);
+                tud_cdc_write(debug_buf, debug_len);
+                tud_cdc_write_flush();
                 
-                http_state_t *state = (http_state_t *)malloc(sizeof(http_state_t));
-                state->data = buf;
-                state->offset = 0;
-                state->total_len = len;
-                
-                tcp_arg(tpcb, state);
-                tcp_sent(tpcb, http_sent);
-                tcp_write(tpcb, buf, (len > 1024) ? 1024 : len, TCP_WRITE_FLAG_COPY);
-                tcp_output(tpcb);
+                if (hour >= 0 && hour < 24 && minute >= 0 && minute < 60 && second >= 0 && second < 60) {
+                    current_hour = hour;
+                    current_minute = minute;
+                    current_second = second;
+                    time_synced = true;
+                    indicate_network_status(3);
+                    set_ntp_callback(hour, minute, second);
+                    
+                    debug_len = snprintf(debug_buf, sizeof(debug_buf), "[HTTP] Time synced successfully!\n");
+                    tud_cdc_write(debug_buf, debug_len);
+                    tud_cdc_write_flush();
+
+                    char *buf = (char *)malloc(512);
+                    int len = snprintf(buf, 512,
+                        "HTTP/1.1 200 OK\r\n"
+                        "Content-Type: text/html\r\n"
+                        "Connection: close\r\n"
+                        "\r\n"
+                        "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>OK</title></head>"
+                        "<body style='font-family:Arial;padding:20px;text-align:center;'>"
+                        "<h1 style='color:#4CAF50;'>Time Set!</h1>"
+                        "<p style='font-size:24px;'>%02d:%02d:%02d</p>"
+                        "<p><a href='/'>Back</a></p>"
+                        "</body></html>",
+                        hour, minute, second);
+                    
+                    free(state->request_data);
+                    state->request_data = NULL;
+                    state->receiving_post = false;
+                    state->data = buf;
+                    state->offset = 0;
+                    state->total_len = len;
+                    
+                    tcp_sent(tpcb, http_sent);
+                    tcp_write(tpcb, buf, (len > 1024) ? 1024 : len, TCP_WRITE_FLAG_COPY);
+                    tcp_output(tpcb);
+                }
+            } else {
+                debug_len = snprintf(debug_buf, sizeof(debug_buf), "[HTTP] Failed to parse POST data\n");
+                tud_cdc_write(debug_buf, debug_len);
+                tud_cdc_write_flush();
             }
         }
-    } else {
+        pbuf_free(p);
+        return ERR_OK;
+    }
+    
+    // 显示请求的前150个字符
+    int show_len = (total_len > 150) ? 150 : total_len;
+    debug_len = snprintf(debug_buf, sizeof(debug_buf), "[HTTP] Full request (%d bytes): %.*s\n", total_len, show_len, current_data);
+    tud_cdc_write(debug_buf, debug_len);
+    tud_cdc_write_flush();
+    
+    // 检查是否是POST请求
+    if (strncmp(current_data, "POST /set", 9) == 0) {
+        // 查找Content-Length
+        const char *content_len_str = strstr(current_data, "Content-Length:");
+        int content_length = 0;
+        if (content_len_str) {
+            content_length = atoi(content_len_str + 15);
+            debug_len = snprintf(debug_buf, sizeof(debug_buf), "[HTTP] POST with Content-Length: %d\n", content_length);
+            tud_cdc_write(debug_buf, debug_len);
+            tud_cdc_write_flush();
+        }
+        
+        // 查找HTTP头结束位置（\r\n\r\n）
+        const char *header_end = strstr(current_data, "\r\n\r\n");
+        if (header_end) {
+            int header_len = header_end - current_data + 4;
+            const char *body_start = header_end + 4;
+            int body_len = total_len - header_len;
+            
+            debug_len = snprintf(debug_buf, sizeof(debug_buf), "[HTTP] Header end at %d, body len=%d\n", header_len, body_len);
+            tud_cdc_write(debug_buf, debug_len);
+            tud_cdc_write_flush();
+            
+            // 如果body还不完整，保存状态等待更多数据
+            if (body_len < content_length) {
+                debug_len = snprintf(debug_buf, sizeof(debug_buf), "[HTTP] Body incomplete (got %d, need %d), saving state...\n", body_len, content_length);
+                tud_cdc_write(debug_buf, debug_len);
+                tud_cdc_write_flush();
+                
+                // 创建状态并保存已接收的数据
+                http_state_t *new_state = (http_state_t *)malloc(sizeof(http_state_t));
+                if (new_state) {
+                    memset(new_state, 0, sizeof(http_state_t));
+                    new_state->request_data = current_data;
+                    new_state->request_len = total_len;
+                    new_state->content_length = content_length;
+                    new_state->header_len = header_len;
+                    new_state->receiving_post = true;
+                    
+                    tcp_arg(tpcb, new_state);
+                    pbuf_free(p);
+                    return ERR_OK;
+                }
+                free(current_data);
+                pbuf_free(p);
+                return ERR_OK;
+            }
+            
+            // 完整请求，处理它
+            debug_len = snprintf(debug_buf, sizeof(debug_buf), "[HTTP] Complete POST request, parsing body...\n");
+            tud_cdc_write(debug_buf, debug_len);
+            tud_cdc_write_flush();
+            
+            int hour = 0, minute = 0, second = 0;
+            if (parse_post_data(body_start, &hour, &minute, &second)) {
+                debug_len = snprintf(debug_buf, sizeof(debug_buf), "[HTTP] Parsed time: %02d:%02d:%02d\n", hour, minute, second);
+                tud_cdc_write(debug_buf, debug_len);
+                tud_cdc_write_flush();
+                
+                if (hour >= 0 && hour < 24 && minute >= 0 && minute < 60 && second >= 0 && second < 60) {
+                    current_hour = hour;
+                    current_minute = minute;
+                    current_second = second;
+                    time_synced = true;
+                    indicate_network_status(3);
+                    set_ntp_callback(hour, minute, second);
+                    
+                    debug_len = snprintf(debug_buf, sizeof(debug_buf), "[HTTP] Time synced successfully!\n");
+                    tud_cdc_write(debug_buf, debug_len);
+                    tud_cdc_write_flush();
+
+                    char *buf = (char *)malloc(512);
+                    int len = snprintf(buf, 512,
+                        "HTTP/1.1 200 OK\r\n"
+                        "Content-Type: text/html\r\n"
+                        "Connection: close\r\n"
+                        "\r\n"
+                        "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>OK</title></head>"
+                        "<body style='font-family:Arial;padding:20px;text-align:center;'>"
+                        "<h1 style='color:#4CAF50;'>Time Set!</h1>"
+                        "<p style='font-size:24px;'>%02d:%02d:%02d</p>"
+                        "<p><a href='/'>Back</a></p>"
+                        "</body></html>",
+                        hour, minute, second);
+                    
+                    http_state_t *resp_state = (http_state_t *)malloc(sizeof(http_state_t));
+                    resp_state->data = buf;
+                    resp_state->offset = 0;
+                    resp_state->total_len = len;
+                    resp_state->request_data = NULL;
+                    resp_state->receiving_post = false;
+                    
+                    tcp_arg(tpcb, resp_state);
+                    tcp_sent(tpcb, http_sent);
+                    tcp_write(tpcb, buf, (len > 1024) ? 1024 : len, TCP_WRITE_FLAG_COPY);
+                    tcp_output(tpcb);
+                } else {
+                    debug_len = snprintf(debug_buf, sizeof(debug_buf), "[HTTP] Invalid time values\n");
+                    tud_cdc_write(debug_buf, debug_len);
+                    tud_cdc_write_flush();
+                }
+            } else {
+                debug_len = snprintf(debug_buf, sizeof(debug_buf), "[HTTP] Failed to parse POST data\n");
+                tud_cdc_write(debug_buf, debug_len);
+                tud_cdc_write_flush();
+            }
+        }
+        free(current_data);
+    } else if (strncmp(current_data, "GET /", 5) == 0 || strncmp(current_data, "GET /set", 8) == 0) {
+        debug_len = snprintf(debug_buf, sizeof(debug_buf), "[HTTP] GET request, serving main page\n");
+        tud_cdc_write(debug_buf, debug_len);
+        tud_cdc_write_flush();
+        
         const char *body = 
             "<!DOCTYPE html><html>"
             "<head><meta charset='UTF-8'><title>LED Clock</title></head>"
@@ -236,15 +438,23 @@ static err_t http_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t er
         memcpy(buf + http_header_len, body, body_len);
         int total_len = http_header_len + body_len;
         
-        http_state_t *state = (http_state_t *)malloc(sizeof(http_state_t));
-        state->data = buf;
-        state->offset = 0;
-        state->total_len = total_len;
+        http_state_t *resp_state = (http_state_t *)malloc(sizeof(http_state_t));
+        resp_state->data = buf;
+        resp_state->offset = 0;
+        resp_state->total_len = total_len;
+        resp_state->request_data = NULL;
+        resp_state->receiving_post = false;
         
-        tcp_arg(tpcb, state);
+        tcp_arg(tpcb, resp_state);
         tcp_sent(tpcb, http_sent);
         tcp_write(tpcb, buf, total_len, TCP_WRITE_FLAG_COPY);
         tcp_output(tpcb);
+        free(current_data);
+    } else {
+        debug_len = snprintf(debug_buf, sizeof(debug_buf), "[HTTP] Unknown request: %.*s\n", show_len, current_data);
+        tud_cdc_write(debug_buf, debug_len);
+        tud_cdc_write_flush();
+        free(current_data);
     }
 
     pbuf_free(p);
@@ -259,7 +469,17 @@ static err_t http_accept(void *arg, struct tcp_pcb *newpcb, err_t err) {
 }
 
 void net_init(void) {
+    char buf[128];
+    int len;
+    
+    len = snprintf(buf, sizeof(buf), "[NET] Initializing network...\n");
+    tud_cdc_write(buf, len);
+    tud_cdc_write_flush();
+    
     lwip_init();
+    len = snprintf(buf, sizeof(buf), "[NET] lwIP initialized\n");
+    tud_cdc_write(buf, len);
+    tud_cdc_write_flush();
 
     netif.hwaddr_len = sizeof(tud_network_mac_address);
     memcpy(netif.hwaddr, tud_network_mac_address, sizeof(tud_network_mac_address));
@@ -269,6 +489,10 @@ void net_init(void) {
     netif_set_default(&netif);
     netif_set_up(&netif);
 
+    len = snprintf(buf, sizeof(buf), "[NET] Network interface up: 192.168.7.1\n");
+    tud_cdc_write(buf, len);
+    tud_cdc_write_flush();
+    
     indicate_network_status(1);
 
     http_server_pcb = tcp_new();
@@ -278,18 +502,52 @@ void net_init(void) {
         tcp_bind(http_server_pcb, &any_addr, 80);
         http_server_pcb = tcp_listen(http_server_pcb);
         tcp_accept(http_server_pcb, http_accept);
+        
+        len = snprintf(buf, sizeof(buf), "[NET] HTTP server started on port 80\n");
+        tud_cdc_write(buf, len);
+        tud_cdc_write_flush();
+    } else {
+        len = snprintf(buf, sizeof(buf), "[NET] ERROR: Failed to create HTTP server\n");
+        tud_cdc_write(buf, len);
+        tud_cdc_write_flush();
     }
 
     dhserv_init(&dhcp_config);
+    len = snprintf(buf, sizeof(buf), "[NET] DHCP server initialized\n");
+    tud_cdc_write(buf, len);
+    tud_cdc_write_flush();
+    
     dnserv_init(&ipaddr, 53, dns_query_proc);
+    len = snprintf(buf, sizeof(buf), "[NET] DNS server initialized\n");
+    tud_cdc_write(buf, len);
+    tud_cdc_write_flush();
 }
 
 void net_task(void) {
+    static bool prev_link_up = false;
     tud_task();
     service_traffic();
 
-    if (netif_is_link_up(&netif) && !network_connected) {
+    bool link_up = netif_is_link_up(&netif);
+    if (link_up && !prev_link_up) {
+        char buf[64];
+        int len = snprintf(buf, sizeof(buf), "[NET] Link UP\n");
+        tud_cdc_write(buf, len);
+        tud_cdc_write_flush();
+    } else if (!link_up && prev_link_up) {
+        char buf[64];
+        int len = snprintf(buf, sizeof(buf), "[NET] Link DOWN\n");
+        tud_cdc_write(buf, len);
+        tud_cdc_write_flush();
+    }
+    prev_link_up = link_up;
+
+    if (link_up && !network_connected) {
         network_connected = true;
+        char buf[64];
+        int len = snprintf(buf, sizeof(buf), "[NET] Network connected, status=2 (DHCP ready)\n");
+        tud_cdc_write(buf, len);
+        tud_cdc_write_flush();
         indicate_network_status(2);
     }
 }

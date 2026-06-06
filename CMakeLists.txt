@@ -50,7 +50,7 @@ target_link_libraries(led_visual_clock
     m
 )
 
-pico_enable_stdio_usb(led_visual_clock 0)
-pico_enable_stdio_uart(led_visual_clock 0)
+pico_enable_stdio_usb(led_visual_clock 1)
+pico_enable_stdio_uart(led_visual_clock 1)
 
 pico_add_extra_outputs(led_visual_clock)
