@@ -45,4 +45,6 @@ void net_task(void);
 bool net_is_connected(void);
 bool net_time_synced(void);
 
+void debug_print(const char *format, ...);
+
 #endif

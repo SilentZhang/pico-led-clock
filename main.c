@@ -27,6 +27,100 @@ static uint64_t last_display_time = 0;
 bool time_synced = false;
 static uint8_t network_status = 0; // 0: no link, 1: link up, 2: dhcp ok, 3: ntp ok
 
+// ASCII数字定义 - 使用二维数组，每个数字一个字符串
+static const char* ascii_digit_lines[] = {
+    // 0
+    " ####### \n"
+    "##     ##\n"
+    "##     ##\n"
+    "##     ##\n"
+    "##     ##\n"
+    "##     ##\n"
+    " ####### \n",
+    // 1
+    "   ###   \n"
+    "  #####  \n"
+    "   ###   \n"
+    "   ###   \n"
+    "   ###   \n"
+    "   ###   \n"
+    "   ###   \n",
+    // 2
+    " ####### \n"
+    "##     ##\n"
+    "       ##\n"
+    " ####### \n"
+    "##       \n"
+    "##       \n"
+    " ####### \n",
+    // 3
+    " ####### \n"
+    "##     ##\n"
+    "       ##\n"
+    " ####### \n"
+    "       ##\n"
+    "##     ##\n"
+    " ####### \n",
+    // 4
+    "##     ##\n"
+    "##     ##\n"
+    "##     ##\n"
+    " ####### \n"
+    "       ##\n"
+    "       ##\n"
+    "       ##\n",
+    // 5
+    " ####### \n"
+    "##       \n"
+    "##       \n"
+    " ####### \n"
+    "       ##\n"
+    "##     ##\n"
+    " ####### \n",
+    // 6
+    " ####### \n"
+    "##       \n"
+    "##       \n"
+    " ####### \n"
+    "##     ##\n"
+    "##     ##\n"
+    " ####### \n",
+    // 7
+    " ####### \n"
+    "       ##\n"
+    "       ##\n"
+    "       ##\n"
+    "       ##\n"
+    "       ##\n"
+    "       ##\n",
+    // 8
+    " ####### \n"
+    "##     ##\n"
+    "##     ##\n"
+    " ####### \n"
+    "##     ##\n"
+    "##     ##\n"
+    " ####### \n",
+    // 9
+    " ####### \n"
+    "##     ##\n"
+    "##     ##\n"
+    " ####### \n"
+    "       ##\n"
+    "##     ##\n"
+    " ####### \n"
+};
+
+// 冒号定义
+static const char* ascii_colon_lines = 
+    "   ##    \n"
+    "         \n"
+    "         \n"
+    "   ##    \n"
+    "         \n"
+    "         \n"
+    "         \n";
+
 // 离线时间设置 - 按钮状态机
 typedef enum {
     BTN_WAIT_FIRST,      // 等待第一轮按键（小时）
@@ -251,6 +345,7 @@ void offline_time_set_update(void) {
 }
 
 void debug_print(const char *format, ...) {
+#ifndef NDEBUG
     va_list args;
     va_start(args, format);
     char buffer[256];
@@ -265,7 +360,103 @@ void debug_print(const char *format, ...) {
         }
         tud_cdc_write_flush();
     }
+#endif
 }
+
+// Release模式下输出ASCII格式时间（每10秒调用一次）
+#ifdef NDEBUG
+static void print_ascii_time(void) {
+    uint32_t h = current_hour;
+    uint32_t m = current_minute;
+    uint32_t s = current_second;
+    
+    // 获取数字索引
+    int digits[6] = {
+        h / 10, h % 10,  // 小时
+        m / 10, m % 10,  // 分钟
+        s / 10, s % 10   // 秒数
+    };
+    
+    // 逐行输出
+    for (int line = 0; line < 7; line++) {
+        char buf[256];
+        int pos = 0;
+        
+        // 每行起始索引：每行10字节（9字符+换行符）
+        int line_start = line * 10;
+        
+        // 小时十位 - 取前9个字符（跳过换行符）
+        const char* d = ascii_digit_lines[digits[0]];
+        for (int i = 0; i < 9; i++) {
+            buf[pos++] = d[line_start + i];
+        }
+        buf[pos++] = ' ';  // 数字间空格
+        
+        // 小时个位
+        d = ascii_digit_lines[digits[1]];
+        for (int i = 0; i < 9; i++) {
+            buf[pos++] = d[line_start + i];
+        }
+        buf[pos++] = ' ';  // 数字间空格
+        
+        // 冒号
+        for (int i = 0; i < 9; i++) {
+            buf[pos++] = ascii_colon_lines[line_start + i];
+        }
+        buf[pos++] = ' ';  // 数字间空格
+        
+        // 分钟十位
+        d = ascii_digit_lines[digits[2]];
+        for (int i = 0; i < 9; i++) {
+            buf[pos++] = d[line_start + i];
+        }
+        buf[pos++] = ' ';  // 数字间空格
+        
+        // 分钟个位
+        d = ascii_digit_lines[digits[3]];
+        for (int i = 0; i < 9; i++) {
+            buf[pos++] = d[line_start + i];
+        }
+        buf[pos++] = ' ';  // 数字间空格
+        
+        // 冒号
+        for (int i = 0; i < 9; i++) {
+            buf[pos++] = ascii_colon_lines[line_start + i];
+        }
+        buf[pos++] = ' ';  // 数字间空格
+        
+        // 秒数十位
+        d = ascii_digit_lines[digits[4]];
+        for (int i = 0; i < 9; i++) {
+            buf[pos++] = d[line_start + i];
+        }
+        buf[pos++] = ' ';  // 数字间空格
+        
+        // 秒数个位
+        d = ascii_digit_lines[digits[5]];
+        for (int i = 0; i < 9; i++) {
+            buf[pos++] = d[line_start + i];
+        }
+        
+        buf[pos++] = '\n';
+        buf[pos] = '\0';
+        
+        // 确保完整发送每一行
+        int sent = 0;
+        while (sent < pos) {
+            int n = tud_cdc_write(buf + sent, pos - sent);
+            if (n > 0) {
+                sent += n;
+            }
+            tud_task();
+        }
+    }
+    
+    // 输出两个换行分隔下一轮
+    tud_cdc_write("\n\n", 2);
+    tud_cdc_write_flush();
+}
+#endif
 
 void indicate_network_status(uint8_t status) {
     debug_print("Network status changed: %d -> %d\n", network_status, status);
@@ -557,6 +748,7 @@ int main(void) {
     
     uint32_t log_count = 0;
     uint64_t last_log_time = to_us_since_boot(get_absolute_time());
+    uint64_t last_ascii_time = to_us_since_boot(get_absolute_time());
     
     while (true) {
         tud_task();
@@ -566,10 +758,20 @@ int main(void) {
         fsm_update(&fsm);
         
         uint64_t now = to_us_since_boot(get_absolute_time());
+        
+#ifndef NDEBUG
+        // Debug模式：每秒输出简单日志
         if (now - last_log_time >= 1000000) {
             debug_print("Loop %d: Time=%02d:%02d:%02d\n", log_count++, current_hour, current_minute, current_second);
             last_log_time = now;
         }
+#else
+        // Release模式：每10秒输出ASCII格式时间
+        if (now - last_ascii_time >= 10000000) {
+            print_ascii_time();
+            last_ascii_time = now;
+        }
+#endif
         
         tight_loop_contents();
     }
