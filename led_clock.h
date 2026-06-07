@@ -5,8 +5,6 @@
 #include <stdbool.h>
 
 #define WS2812_PIN 16
-// BOOT 按键连接到 QSPI_SS 引脚，需要特殊方式读取
-// CS_PIN_INDEX = 1 (QSPI_SS 的索引，不是 GPIO 编号)
 
 typedef enum {
     STATE_IDLE,
@@ -36,6 +34,7 @@ typedef struct {
 void ws2812_init(void);
 void set_ws2812(uint8_t r, uint8_t g, uint8_t b);
 void all_leds_off(void);
+
 void fsm_init(fsm_t *fsm);
 void fsm_update(fsm_t *fsm);
 void start_display(void);
@@ -44,6 +43,16 @@ void net_init(void);
 void net_task(void);
 bool net_is_connected(void);
 bool net_time_synced(void);
+
+void offline_time_set_init(void);
+void offline_time_set_update(void);
+
+void update_time(void);
+time_encoded_t encode_time(void);
+
+#ifdef NDEBUG
+void print_ascii_time(void);
+#endif
 
 void debug_print(const char *format, ...);
 

@@ -32,6 +32,11 @@ add_executable(led_visual_clock
     usb_descriptors.c
     dhserver.c
     dnserver.c
+    offline_time.c
+    ascii_time.c
+    ws2812.c
+    time_utils.c
+    fsm.c
 )
 
 pico_generate_pio_header(led_visual_clock ${CMAKE_CURRENT_LIST_DIR}/ws2812.pio)
