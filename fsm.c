@@ -89,8 +89,16 @@ void fsm_update(fsm_t *fsm) {
                 fsm->blink_total = current_time.n_quarter;
                 fsm->led_on = false;
                 fsm->last_tick = now;
-                fsm->current_state = STATE_BLINK_QUARTER;
-                debug_print("fsm_update: Transition to BLINK_QUARTER, quarter=%d\n", fsm->blink_total);
+                
+                // 0刻钟时跳过绿灯闪烁
+                if (fsm->blink_total == 0) {
+                    fsm->current_state = STATE_TRANSITION_2;
+                    fsm->transition_start = now;
+                    debug_print("fsm_update: Skip BLINK_QUARTER (0 quarter)\n");
+                } else {
+                    fsm->current_state = STATE_BLINK_QUARTER;
+                    debug_print("fsm_update: Transition to BLINK_QUARTER, quarter=%d\n", fsm->blink_total);
+                }
             } else {
                 all_leds_off();
             }
@@ -123,8 +131,16 @@ void fsm_update(fsm_t *fsm) {
                 fsm->blink_total = current_time.n_minute_rem;
                 fsm->led_on = false;
                 fsm->last_tick = now;
-                fsm->current_state = STATE_BLINK_MINUTE;
-                debug_print("fsm_update: Transition to BLINK_MINUTE, minute=%d\n", fsm->blink_total);
+                
+                // 0分钟余数时跳过蓝灯闪烁，直接回到IDLE
+                if (fsm->blink_total == 0) {
+                    fsm->current_state = STATE_IDLE;
+                    last_display_time = to_us_since_boot(get_absolute_time());
+                    debug_print("fsm_update: Skip BLINK_MINUTE (0 minute rem), back to IDLE\n");
+                } else {
+                    fsm->current_state = STATE_BLINK_MINUTE;
+                    debug_print("fsm_update: Transition to BLINK_MINUTE, minute=%d\n", fsm->blink_total);
+                }
             } else {
                 all_leds_off();
             }

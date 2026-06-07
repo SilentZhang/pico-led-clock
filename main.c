@@ -48,6 +48,57 @@ void debug_print(const char *format, ...) {
 #endif
 }
 
+// 串口手动设置时间：接收 HHMMSS 格式的时间
+static bool set_time_from_serial(void) {
+    if (!tud_cdc_available()) {
+        return false;
+    }
+    
+    static char input_buf[16] = {0};
+    static uint8_t buf_pos = 0;
+    
+    while (tud_cdc_available()) {
+        char c;
+        if (tud_cdc_read(&c, 1) == 1) {
+            if (c == '\n' || c == '\r') {
+                // 收到换行，处理命令
+                if (buf_pos == 6) {
+                    input_buf[6] = '\0';
+                    
+                    // 解析 HHMMSS
+                    int h = (input_buf[0] - '0') * 10 + (input_buf[1] - '0');
+                    int m = (input_buf[2] - '0') * 10 + (input_buf[3] - '0');
+                    int s = (input_buf[4] - '0') * 10 + (input_buf[5] - '0');
+                    
+                    // 验证格式：H 0-23, M 0-59, S 0-59
+                    if (h <= 23 && m <= 59 && s <= 59) {
+                        current_hour = h;
+                        current_minute = m;
+                        current_second = s;
+                        last_time_update = to_us_since_boot(get_absolute_time());
+                        time_synced = true;
+                        
+                        // 在release模式下也输出应答
+                        char resp[32];
+                        int len = snprintf(resp, sizeof(resp), "[OK] Time set to %02d:%02d:%02d\n", 
+                                         current_hour, current_minute, current_second);
+                        tud_cdc_write(resp, len);
+                        tud_cdc_write_flush();
+                    } else {
+                        tud_cdc_write("[ERR] Invalid time format\n", 25);
+                        tud_cdc_write_flush();
+                    }
+                }
+                buf_pos = 0;
+                memset(input_buf, 0, sizeof(input_buf));
+            } else if (buf_pos < 15 && c >= '0' && c <= '9') {
+                input_buf[buf_pos++] = c;
+            }
+        }
+    }
+    return false;
+}
+
 int main(void) {
     ws2812_init();
     
@@ -79,6 +130,7 @@ int main(void) {
         net_task();
         offline_time_set_update();
         fsm_update(&fsm);
+        set_time_from_serial();
         
         uint64_t now = to_us_since_boot(get_absolute_time());
         
